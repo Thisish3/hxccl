@@ -1,0 +1,32 @@
+cmake_minimum_required(VERSION 3.20)
+project(hxccl CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+find_package(MPI REQUIRED COMPONENTS CXX)
+add_compile_options(-Wall -Wextra -Wpedantic)
+
+file(GLOB HXCCL_SRC CONFIGURE_DEPENDS src/*.cc)
+add_library(hxccl STATIC ${HXCCL_SRC})
+target_include_directories(hxccl PUBLIC include PRIVATE src)
+target_link_libraries(hxccl PUBLIC MPI::MPI_CXX)
+
+enable_testing()
+function(hxccl_mpi_test name)
+  add_executable(${name} tests/${name}.cc)
+  target_include_directories(${name} PRIVATE src tests)
+  target_link_libraries(${name} PRIVATE hxccl)
+  foreach(np 1 2 3 4 5 8)
+    add_test(NAME ${name}_np${np}
+             COMMAND ${MPIEXEC_EXECUTABLE} --oversubscribe ${MPIEXEC_NUMPROC_FLAG} ${np}
+                     $<TARGET_FILE:${name}>)
+  endforeach()
+endfunction()
+file(GLOB TEST_SRC CONFIGURE_DEPENDS tests/test_*.cc)
+foreach(src ${TEST_SRC})
+  get_filename_component(name ${src} NAME_WE)
+  hxccl_mpi_test(${name})
+endforeach()
+
+add_executable(hxccl_perf bench/hxccl_perf.cc)
+target_link_libraries(hxccl_perf PRIVATE hxccl)
