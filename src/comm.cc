@@ -59,7 +59,9 @@ hxcclResult_t hxcclCommInitRank(hxcclComm_t* comm, int nranks, hxcclUniqueId id,
     return hxcclSystemError;
   int size = 0;
   MPI_Comm_size(sub, &size);
-  if (size != nranks) {
+  int got = -1;
+  MPI_Comm_rank(sub, &got);
+  if (size != nranks || got != rank) {  // ranks disagree about who is who
     MPI_Comm_free(&sub);
     return hxcclInvalidUsage;
   }

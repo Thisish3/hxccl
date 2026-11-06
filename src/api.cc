@@ -3,8 +3,11 @@
 #include "reduce.h"
 #include "select.h"
 
+#include <climits>
 #include <cstdint>
 #include <string>
+
+#include "chunks.h"
 
 namespace {
 
@@ -21,6 +24,14 @@ hxcclResult_t check_args(hxcclComm* c, const void* send, const void* recv, size_
   return hxcclSuccess;
 }
 
+// The MPI transport carries at most INT_MAX bytes per message. Every rank
+// computes the same largest message, so all of them reject together.
+hxcclResult_t check_message(hxcclComm* c, size_t largest_bytes) {
+  if (largest_bytes <= static_cast<size_t>(INT_MAX)) return hxcclSuccess;
+  return comm_fail(c, hxcclInvalidArgument,
+                   "a single message would exceed INT_MAX bytes (MPI transport limit)");
+}
+
 hxcclResult_t check_op(hxcclComm* c, hxcclRedOp_t op) {
   return valid_op(op) ? hxcclSuccess : comm_fail(c, hxcclInvalidArgument, "unknown op");
 }
@@ -33,12 +44,17 @@ hxcclResult_t hxcclAllReduce(const void* send, void* recv, size_t count, hxcclDa
                              hxcclRedOp_t op, hxcclComm_t c, hxcclStream_t) {
   if (hxcclResult_t r = check_args(c, send, recv, count, 1, dt)) return r;
   if (hxcclResult_t r = check_op(c, op)) return r;
-  return allreduce_with(c, choose_allreduce(count * dtype_size(dt)), send, recv, count, dt,
-                        op);
+  const size_t es = dtype_size(dt);
+  const Algo algo = choose_allreduce(count * es);
+  const size_t largest =
+      algo == Algo::Ring ? chunk_of(count, c->nranks, 0).len * es : count * es;
+  if (hxcclResult_t r = check_message(c, largest)) return r;
+  return allreduce_with(c, algo, send, recv, count, dt, op);
 }
 hxcclResult_t hxcclAllGather(const void* send, void* recv, size_t sendcount,
                              hxcclDataType_t dt, hxcclComm_t c, hxcclStream_t) {
   if (hxcclResult_t r = check_args(c, send, recv, sendcount, c ? c->nranks : 1, dt)) return r;
+  if (hxcclResult_t r = check_message(c, sendcount * dtype_size(dt))) return r;
   hxcclResult_t r =
       ring_allgather(*c->tr, c->rank, c->nranks, send, recv, sendcount, dtype_size(dt));
   return r == hxcclSuccess ? r : comm_fail(c, r, c->tr->error);
@@ -48,6 +64,7 @@ hxcclResult_t hxcclReduceScatter(const void* send, void* recv, size_t recvcount,
                                  hxcclStream_t) {
   if (hxcclResult_t r = check_args(c, send, recv, recvcount, c ? c->nranks : 1, dt)) return r;
   if (hxcclResult_t r = check_op(c, op)) return r;
+  if (hxcclResult_t r = check_message(c, recvcount * dtype_size(dt))) return r;
   hxcclResult_t r =
       ring_reducescatter(*c->tr, c->rank, c->nranks, send, recv, recvcount, dt, op);
   return r == hxcclSuccess ? r : comm_fail(c, r, c->tr->error);

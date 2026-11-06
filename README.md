@@ -74,12 +74,15 @@ N = 4, allreduce float32:
 
 What was measured:
 
-- At N = 4, hxccl is within about 0.85× to 1.2× of OpenMPI's `MPI_Allreduce` at every size.
-- Below 1 MB, OpenMPI is a little faster. At 4 to 16 MB, hxccl is a little faster.
-- At N = 8, sizes up to 4 MB behave the same way (see the raw output in `docs/bench/`).
+- At N = 4, hxccl's time is 0.84× to 1.25× OpenMPI's `MPI_Allreduce` (hxccl ÷ MPI).
+  - From 4 KB to 1 MB, OpenMPI is faster (1.09× to 1.25×).
+  - At 4 MB and 16 MB, hxccl is faster (0.84× and 0.93×).
+  - At 256 B, 1 KB and 64 MB, the two are about equal.
+- At N = 8, up to 4 MB, the ratio is 0.86× to 1.1×, and neither library is consistently ahead (raw output in `docs/bench/`).
 - At N = 8, from 16 MB up, both libraries vary a lot from run to run. Four runs at 16 MB gave:
   - hxccl: 17.6, 17.7, 18.2 and 127 ms
   - MPI: 61, 67, 85 and 98 ms
+- Times come out in whole microseconds, which suggests a 1 µs timer resolution. The 256 B to 4 KB rows therefore carry about ±1 µs.
 - A Debug build (no `-O`) made hxccl 15 to 20× slower. That is why the build now defaults to Release.
 
 Not verified:
