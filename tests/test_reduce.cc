@@ -2,6 +2,8 @@
 #include "chunks.h"
 #include "reduce.h"
 
+#include <cstdint>
+
 int main(int argc, char** argv) {
   MPI_Init(&argc, &argv);
   int r;
@@ -30,6 +32,17 @@ int main(int argc, char** argv) {
     double d[2] = {3.0, -1.0}, e[2] = {2.0, -7.0};
     reduce_into(d, e, 2, hxcclFloat64, hxcclMin);
     CHECK(d[0] == 2.0 && d[1] == -7.0);
+
+    // integer Avg divides by nranks, which may not fit the element type (int8 at 200 ranks)
+    int8_t i8 = -100;
+    divide_trunc(&i8, 1, hxcclInt8, 200);
+    CHECK(i8 == 0);
+    uint8_t u8 = 200;
+    divide_trunc(&u8, 1, hxcclUint8, 256);
+    CHECK(u8 == 0);
+    int64_t i64 = -7;
+    divide_trunc(&i64, 1, hxcclInt64, 2);
+    CHECK(i64 == -3);
 
     Chunk c0 = chunk_of(7, 3, 0), c1 = chunk_of(7, 3, 1), c2 = chunk_of(7, 3, 2);
     CHECK(c0.off == 0 && c0.len == 3 && c1.off == 3 && c1.len == 2 && c2.off == 5 &&

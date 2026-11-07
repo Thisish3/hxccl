@@ -101,6 +101,23 @@ void op_from_other_comm(hxcclComm_t c) {
   hxcclRedOpDestroy(op, other);
   hxcclCommDestroy(other);
 }
+// handles are per comm: index 0 on one comm must not be accepted as index 0 on another
+void op_from_other_comm_with_ops(hxcclComm_t c) {
+  hxcclComm_t other;
+  CHECK(hxcclCommInitMPI(&other, MPI_COMM_WORLD) == hxcclSuccess);
+  float mine = 5.0f, theirs = 2.0f;
+  hxcclRedOp_t op_c, op_other;
+  CHECK(hxcclRedOpCreatePreMulSum(&op_c, &mine, hxcclFloat32, hxcclScalarHostImmediate, c) ==
+        hxcclSuccess);
+  CHECK(hxcclRedOpCreatePreMulSum(&op_other, &theirs, hxcclFloat32, hxcclScalarHostImmediate,
+                                  other) == hxcclSuccess);
+  float x = 1.0f, y = 0.0f;
+  CHECK(hxcclAllReduce(&x, &y, 1, hxcclFloat32, op_other, c, nullptr) == hxcclInvalidArgument);
+  CHECK(hxcclRedOpDestroy(op_other, c) == hxcclInvalidArgument);
+  hxcclRedOpDestroy(op_c, c);
+  hxcclRedOpDestroy(op_other, other);
+  hxcclCommDestroy(other);
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -115,6 +132,7 @@ int main(int argc, char** argv) {
   premul_host_and_device(c);
   premul_int_reducescatter(c);
   op_from_other_comm(c);
+  op_from_other_comm_with_ops(c);
   hxcclCommDestroy(c);
   return finish();
 }

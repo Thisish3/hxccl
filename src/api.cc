@@ -78,6 +78,8 @@ hxcclResult_t hxcclRedOpCreatePreMulSum(hxcclRedOp_t* op, void* scalar, hxcclDat
     return comm_fail(c, hxcclInvalidArgument, "unknown scalar residence");
   size_t ix = 0;
   while (ix < c->user_ops.size() && c->user_ops[ix].live) ++ix;
+  if (ix >> kOpIndexBits)
+    return comm_fail(c, hxcclInternalError, "too many live PreMulSum ops on this communicator");
   if (ix == c->user_ops.size()) c->user_ops.emplace_back();
   UserOp& u = c->user_ops[ix];
   u = UserOp{};
@@ -88,14 +90,15 @@ hxcclResult_t hxcclRedOpCreatePreMulSum(hxcclRedOp_t* op, void* scalar, hxcclDat
     u.ptr = scalar;
   else
     std::memcpy(u.value, scalar, dtype_size(dt));
-  *op = static_cast<hxcclRedOp_t>(hxcclNumOps + static_cast<int>(ix));
+  *op = static_cast<hxcclRedOp_t>(hxcclNumOps + (c->op_tag << kOpIndexBits) +
+                                  static_cast<int>(ix));
   return hxcclSuccess;
 }
 
 hxcclResult_t hxcclRedOpDestroy(hxcclRedOp_t op, hxcclComm_t c) {
   if (!c) return hxcclInvalidArgument;
-  const long ix = static_cast<long>(op) - hxcclNumOps;
-  if (ix < 0 || ix >= static_cast<long>(c->user_ops.size()) || !c->user_ops[ix].live)
+  const long ix = user_op_index(c, op);
+  if (ix < 0)
     return comm_fail(c, hxcclInvalidArgument, "not a live PreMulSum op of this communicator");
   c->user_ops[ix].live = false;
   return hxcclSuccess;

@@ -41,9 +41,8 @@ hxcclResult_t plan_op(hxcclComm* c, hxcclRedOp_t op, hxcclDataType_t dt, OpPlan*
     }
     return hxcclSuccess;
   }
-  const long ix = static_cast<long>(op) - hxcclNumOps;
-  if (ix < 0 || ix >= static_cast<long>(c->user_ops.size()) || !c->user_ops[ix].live)
-    return comm_fail(c, hxcclInvalidArgument, "unknown op");
+  const long ix = user_op_index(c, op);
+  if (ix < 0) return comm_fail(c, hxcclInvalidArgument, "unknown op for this communicator");
   const UserOp& u = c->user_ops[ix];
   if (u.dt != dt)
     return comm_fail(c, hxcclInvalidArgument, "PreMulSum op was created for another datatype");

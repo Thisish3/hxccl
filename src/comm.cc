@@ -14,6 +14,9 @@ hxcclResult_t make_comm(hxcclComm_t* out, MPI_Comm owned) {
   MPI_Comm_rank(owned, &c->rank);
   MPI_Comm_size(owned, &c->nranks);
   c->tr = std::make_unique<MpiTransport>(owned);
+  static int next_tag = 0;  // tags wrap after 32766 communicators; a collision needs that many
+  next_tag = next_tag % 0x7ffe + 1;
+  c->op_tag = next_tag;
   *out = c;
   return hxcclSuccess;
 }
@@ -36,6 +39,14 @@ hxcclResult_t check_config(const hxcclConfig_t* cfg) {
 }
 
 }  // namespace
+
+long user_op_index(const hxcclComm* c, hxcclRedOp_t op) {
+  const long v = static_cast<long>(op) - hxcclNumOps;
+  if (v < 0 || (v >> kOpIndexBits) != c->op_tag) return -1;
+  const long ix = v & ((1L << kOpIndexBits) - 1);
+  if (ix >= static_cast<long>(c->user_ops.size()) || !c->user_ops[ix].live) return -1;
+  return ix;
+}
 
 hxcclResult_t comm_fail(hxcclComm* c, hxcclResult_t r, const std::string& msg) {
   if (c) {

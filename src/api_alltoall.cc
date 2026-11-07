@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <climits>
 #include <cstdint>
 #include <vector>
@@ -28,6 +29,29 @@ int local_v_status(const hxcclComm* c, const void* send, const size_t* sc, const
   }
   return status;
 }
+
+// One past the last byte a rank touches on one side of an exchange.
+size_t extent(const std::vector<size_t>& bytes, const std::vector<size_t>& off) {
+  size_t end = 0;
+  for (size_t j = 0; j < bytes.size(); ++j)
+    if (bytes[j]) end = std::max(end, off[j] + bytes[j]);
+  return end;
+}
+
+// In-place (or otherwise overlapping) buffers: the pairwise exchange would overwrite
+// blocks before sending them, so send from a private copy instead.
+hxcclResult_t run_alltoallv(hxcclComm* c, const char* send, const std::vector<size_t>& sb,
+                            const std::vector<size_t>& so, char* recv,
+                            const std::vector<size_t>& rb, const std::vector<size_t>& ro) {
+  const size_t send_end = extent(sb, so), recv_end = extent(rb, ro);
+  std::vector<char> stage;
+  if (send_end && recv_end && send < recv + recv_end && recv < send + send_end) {
+    stage.assign(send, send + send_end);
+    send = stage.data();
+  }
+  return fail_if(c, alltoallv(*c->tr, c->rank, c->nranks, send, sb.data(), so.data(), recv,
+                              rb.data(), ro.data()));
+}
 }  // namespace
 
 extern "C" {
@@ -38,6 +62,8 @@ hxcclResult_t hxcclAllToAllv(const void* send, const size_t sc[], const size_t s
                              const size_t rc[], const size_t rd[], hxcclDataType_t dt,
                              hxcclComm_t c, hxcclStream_t) {
   if (!c) return hxcclInvalidArgument;
+  // every rank sees the same flag, so rejecting before the agreement step is safe
+  if (c->finalized) return comm_fail(c, hxcclInvalidUsage, "communicator was finalized");
   const size_t es = dtype_size(dt);
   int status = local_v_status(c, send, sc, sd, recv, rc, rd, es);
   MPI_Allreduce(MPI_IN_PLACE, &status, 1, MPI_INT, MPI_MAX, c->mpi);
@@ -54,9 +80,8 @@ hxcclResult_t hxcclAllToAllv(const void* send, const size_t sc[], const size_t s
     ro[j] = rd[j] * es;
   }
   return dispatch(c, [=] {
-    return fail_if(c, alltoallv(*c->tr, c->rank, c->nranks, static_cast<const char*>(send),
-                                sb.data(), so.data(), static_cast<char*>(recv), rb.data(),
-                                ro.data()));
+    return run_alltoallv(c, static_cast<const char*>(send), sb, so, static_cast<char*>(recv),
+                         rb, ro);
   });
 }
 
@@ -69,9 +94,8 @@ hxcclResult_t hxcclAlltoAll(const void* send, void* recv, size_t count, hxcclDat
   std::vector<size_t> b(c->nranks, per), off(c->nranks);
   for (int j = 0; j < c->nranks; ++j) off[j] = static_cast<size_t>(j) * per;
   return dispatch(c, [=] {
-    return fail_if(c, alltoallv(*c->tr, c->rank, c->nranks, static_cast<const char*>(send),
-                                b.data(), off.data(), static_cast<char*>(recv), b.data(),
-                                off.data()));
+    return run_alltoallv(c, static_cast<const char*>(send), b, off, static_cast<char*>(recv), b,
+                         off);
   });
 }
 

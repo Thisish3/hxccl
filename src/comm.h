@@ -6,7 +6,8 @@
 #include "hxccl.h"
 #include "transport.h"
 
-// A PreMulSum op made by hxcclRedOpCreatePreMulSum; its handle is hxcclNumOps + index.
+// A PreMulSum op made by hxcclRedOpCreatePreMulSum.
+// Handle = hxcclNumOps + (comm op_tag << 16) + index, so another comm's handle is rejected.
 struct UserOp {
   bool live = false;
   hxcclDataType_t dt = hxcclFloat32;
@@ -22,8 +23,13 @@ struct hxcclComm {
   std::unique_ptr<Transport> tr;
   std::string last_error;
   std::vector<UserOp> user_ops;
+  int op_tag = 0;  // 1..0x7ffe, assigned per communicator in this process
   bool finalized = false;
   hxcclResult_t async_error = hxcclSuccess;  // last transport-level failure
 };
 
 hxcclResult_t comm_fail(hxcclComm* c, hxcclResult_t r, const std::string& msg);
+
+constexpr int kOpIndexBits = 16;
+// Returns the user_ops index of `op` on `c`, or -1 when it is not a live op of `c`.
+long user_op_index(const hxcclComm* c, hxcclRedOp_t op);

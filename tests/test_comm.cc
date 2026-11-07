@@ -106,6 +106,11 @@ void finalize_then_use() {
   int32_t x = 1;
   CHECK(hxcclAllReduce(&x, &x, 1, hxcclInt32, hxcclSum, f, nullptr) == hxcclInvalidUsage);
   CHECK(hxcclSend(&x, 1, hxcclInt32, 0, f, nullptr) == hxcclInvalidUsage);
+  std::vector<size_t> one(n_, 1), dsp(n_);
+  for (int j = 0; j < n_; ++j) dsp[j] = static_cast<size_t>(j);
+  std::vector<int32_t> a(n_), b(n_);
+  CHECK(hxcclAllToAllv(a.data(), one.data(), dsp.data(), b.data(), one.data(), dsp.data(),
+                       hxcclInt32, f, nullptr) == hxcclInvalidUsage);
   CHECK(hxcclCommDestroy(f) == hxcclSuccess);
 }
 

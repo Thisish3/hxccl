@@ -131,19 +131,20 @@ void scale_into(void* dst, const void* src, size_t n, hxcclDataType_t dt, const 
 }
 
 void divide_trunc(void* buf, size_t n, hxcclDataType_t dt, int divisor) {
-#define HX_DIV(DT, T)                                                       \
-  case DT:                                                                  \
-    for (size_t i = 0; i < n; ++i)                                          \
-      static_cast<T*>(buf)[i] =                                             \
-          static_cast<T>(static_cast<T*>(buf)[i] / static_cast<T>(divisor)); \
+  // divide in 64 bits: nranks need not fit the element type (int8 at 200 ranks)
+#define HX_DIV(DT, T, W)                                                               \
+  case DT:                                                                             \
+    for (size_t i = 0; i < n; ++i)                                                     \
+      static_cast<T*>(buf)[i] =                                                        \
+          static_cast<T>(static_cast<W>(static_cast<T*>(buf)[i]) / static_cast<W>(divisor)); \
     break;
   switch (dt) {
-    HX_DIV(hxcclInt8, int8_t)
-    HX_DIV(hxcclUint8, uint8_t)
-    HX_DIV(hxcclInt32, int32_t)
-    HX_DIV(hxcclUint32, uint32_t)
-    HX_DIV(hxcclInt64, int64_t)
-    HX_DIV(hxcclUint64, uint64_t)
+    HX_DIV(hxcclInt8, int8_t, int64_t)
+    HX_DIV(hxcclUint8, uint8_t, uint64_t)
+    HX_DIV(hxcclInt32, int32_t, int64_t)
+    HX_DIV(hxcclUint32, uint32_t, uint64_t)
+    HX_DIV(hxcclInt64, int64_t, int64_t)
+    HX_DIV(hxcclUint64, uint64_t, uint64_t)
     default: break;
   }
 #undef HX_DIV

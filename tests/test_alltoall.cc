@@ -47,6 +47,37 @@ void alltoallv(hxcclComm_t c) {
   CHECK(got == want);
 }
 
+// MPI_Alltoall supports in-place, so a user may pass send == recv
+void alltoall_in_place(hxcclComm_t c, size_t count) {
+  std::vector<int32_t> buf(count * n_), want(count * n_);
+  for (size_t i = 0; i < buf.size(); ++i) buf[i] = rank_ * 1000000 + static_cast<int32_t>(i);
+  MPI_Alltoall(buf.data(), static_cast<int>(count), MPI_INT, want.data(),
+               static_cast<int>(count), MPI_INT, MPI_COMM_WORLD);
+  CHECK(hxcclAlltoAll(buf.data(), buf.data(), count, hxcclInt32, c, nullptr) == hxcclSuccess);
+  CHECK(buf == want);
+}
+
+// symmetric counts so one layout serves as both send and receive side
+void alltoallv_in_place(hxcclComm_t c) {
+  std::vector<size_t> cnt(n_), dsp(n_);
+  std::vector<int> icnt(n_), idsp(n_);
+  size_t off = 0;
+  for (int j = 0; j < n_; ++j) {
+    cnt[j] = static_cast<size_t>((rank_ + j) % 3 + 1);
+    dsp[j] = off;
+    off += cnt[j];
+    icnt[j] = static_cast<int>(cnt[j]);
+    idsp[j] = static_cast<int>(dsp[j]);
+  }
+  std::vector<int32_t> buf(off), want(off);
+  for (size_t i = 0; i < off; ++i) buf[i] = rank_ * 1000 + static_cast<int32_t>(i);
+  MPI_Alltoallv(buf.data(), icnt.data(), idsp.data(), MPI_INT, want.data(), icnt.data(),
+                idsp.data(), MPI_INT, MPI_COMM_WORLD);
+  CHECK(hxcclAllToAllv(buf.data(), cnt.data(), dsp.data(), buf.data(), cnt.data(), dsp.data(),
+                       hxcclInt32, c, nullptr) == hxcclSuccess);
+  CHECK(buf == want);
+}
+
 void traffic(hxcclComm_t c) {
   std::vector<float> in(5 * n_, 1.0f), out(5 * n_);
   hxcclCommResetStats(c);
@@ -91,6 +122,8 @@ int main(int argc, char** argv) {
     alltoall(c, count, true);
   }
   alltoallv(c);
+  for (size_t count : {size_t{1}, size_t{7}}) alltoall_in_place(c, count);
+  alltoallv_in_place(c);
   traffic(c);
   zero_count_no_traffic(c);
   agreed_rejection(c);
