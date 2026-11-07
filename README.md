@@ -139,3 +139,7 @@ hxccl time ÷ OpenMPI time:
 
 - Each cell comes from one run of 20 iterations. Run-to-run spread was not measured for these collectives.
 - The large deviations at 64 KB and 1 MB (Reduce 1.59, Scatter 0.45 and 1.48) were not investigated. OpenMPI's algorithm choice at those sizes was not inspected either.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
