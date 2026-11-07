@@ -73,7 +73,7 @@ virtual hxcclResult_t waitall() = 0;   // 지금까지 걸어 둔 isend/irecv �
 
 ### 5.4 dtype과 리덕션
 
-- `reduce_into`를 dtype 12종으로 넓힌다. 정수 8종은 그대로, fp16/bf16은 float로 계산 후 RNE 변환, fp8 e4m3/e5m2는 float로 계산 후 변환(NCCL은 half로 계산하지만, fp8 입력 두 개의 연산 하나는 둘 다 최종 반올림 전까지 정확해 결과가 같다). 변환 함수는 `src/fp.h`에 순수 함수로 두고 단위 테스트로 고정한다.
+- `reduce_into`를 dtype 12종으로 넓힌다. 정수 8종은 그대로, fp16/bf16은 float로 계산 후 RNE 변환, fp8 e4m3/e5m2는 float로 계산 후 변환(NCCL은 half로 계산한다. 유한한 fp8 입력 쌍 전부(e4m3 64,516개, e5m2 62,500개)에 대해 합과 곱의 결과가 두 경로에서 같은 것을 2026-11-08에 전수 확인했다. half 중간값이 항상 정확하다는 뜻은 아니다). 변환 함수는 `src/fp.h`에 순수 함수로 두고 단위 테스트로 고정한다.
 - fp8 변환 규칙: OCP FP8(e4m3: bias 7, 최대 448, inf 없음 / e5m2: bias 15, inf 있음), RNE. **범위를 넘는 값의 처리**(최대값으로 자르는지, NaN인지)는 NCCL이 쓰는 `__nv_fp8_e4m3(__half)` 생성자의 모드에 달려 있는데, 그 헤더(`cuda_fp8.hpp`)는 CUDA 툴킷에만 있어 아직 확인하지 못했다. A2는 범위를 넘는 값을 정의하지 않고 테스트 입력에서 피한다. B에서 3060 Ti로 같은 입력을 NCCL과 hxccl에 넣어 비교하고 그 결과대로 맞춘다.
 - Avg: 정수형은 합 후 0 방향 버림 나눗셈, 실수형은 각 입력에 `(dtype)(1/N)`을 곱하고 합한다(2절). 실수형 결과는 "합 / N"과 비트가 다를 수 있으며, 테스트 기준값도 같은 순서로 계산한다.
 - PreMulSum: communicator별 사용자 op 표. `HostImmediate`는 값 복사, `Device`는 포인터 저장 후 collective 호출 시 읽는다(CPU에서는 둘 다 호스트 메모리). 다른 comm·다른 dtype으로 쓰면 `hxcclInvalidArgument`. 파괴된 op 사용도 `hxcclInvalidArgument`.

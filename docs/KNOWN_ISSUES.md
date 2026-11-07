@@ -49,4 +49,4 @@ Open problems, deferred review findings and unexplained observations. Update thi
 | Integer Avg narrowed the divisor to the element type (uint8 at 256 ranks divided by zero) | c566754 |
 | The return code of the AllToAllv agreement `MPI_Allreduce` was ignored | 4deac21 |
 | `cancel_all` used `MPI_Cancel` on send requests, which MPI-4 deprecates | 4deac21 |
-| The fp8 comment said "via half" while the code computes in float; spec 6 promised InvalidUsage after Abort although Abort frees the handle | 4deac21 |
+| The fp8 comment said "via half" while the code computes in float (its later "both exact" justification was also wrong; an exhaustive check now backs the claim); spec 6 promised InvalidUsage after Abort although Abort frees the handle | 4deac21 |

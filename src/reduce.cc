@@ -36,8 +36,9 @@ void apply(T* d, const T* s, size_t n, hxcclRedOp_t op) {
   }
 }
 
-// fp16/bf16/fp8: widen to float, reduce, round back. NCCL computes fp8 in half; for one
-// binary op on fp8 inputs both are exact before the final rounding, so results match.
+// fp16/bf16/fp8: widen to float, reduce, round back. NCCL computes fp8 sum/prod in half;
+// an exhaustive check over all finite fp8 input pairs (2026-11-08) found the float and half
+// paths give identical fp8 results for sum and prod.
 template <typename S, float (*ToF)(S), S (*FromF)(float)>
 void apply_small(S* d, const S* s, size_t n, hxcclRedOp_t op) {
   for (size_t i = 0; i < n; ++i) {

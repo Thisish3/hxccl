@@ -64,7 +64,7 @@ Algorithms never call MPI directly, so the GPU IPC transport in B can be dropped
 
 ## Tests
 
-`ctest` runs every test under `mpirun -np N` for N ∈ {1, 2, 3, 4, 5, 8} (30 test runs):
+`ctest` runs every test under `mpirun -np N` for N ∈ {1, 2, 3, 4, 5, 8} (78 test runs):
 
 - **Correctness against MPI:** every collective is compared bit-for-bit with `MPI_Allreduce` / `MPI_Allgather` / `MPI_Reduce_scatter_block` / `MPI_Bcast`, for counts {0, 1, 3, 7, 1000, 4099}. Inputs are exactly representable, so the order of reduction does not matter. The tests cover all ops and dtypes, the ring / rd / auto algorithms, in-place calls, and broadcast from root 0 and root N−1.
 - **Traffic:** the bytes and messages each rank sends must equal the schedule exactly. For ring this is the sum of the chunk sizes it forwards (2(N−1) messages). For rd it is log₂N messages × S when N is a power of two.
