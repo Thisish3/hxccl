@@ -1,5 +1,6 @@
 // nccl-tests style sweep: hxccl vs MPI, same buffers, rank-max time per iteration,
-// median over iterations. busbw factors from nccl-tests doc/PERFORMANCE.md.
+// median over iterations. busbw factors from nccl-tests doc/PERFORMANCE.md and the
+// *GetBw functions in nccl-tests src/*.cu.
 #include <mpi.h>
 
 #include <algorithm>
@@ -59,8 +60,11 @@ int main(int argc, char** argv) {
   hxcclComm_t c;
   hxcclCommInitMPI(&c, MPI_COMM_WORLD);
   const double bus = op == "allreduce" ? 2.0 * (n - 1) / n
-                     : op == "broadcast" ? 1.0
-                                         : 1.0 * (n - 1) / n;
+                     : op == "broadcast" || op == "reduce" || op == "sendrecv" ? 1.0
+                                                                              : 1.0 * (n - 1) / n;
+  // ops whose size is count-per-rank x n (nccl-tests: S = count * nranks * typesize)
+  const bool per_rank = op == "allgather" || op == "reducescatter" || op == "gather" ||
+                        op == "scatter" || op == "alltoall";
   if (rank == 0) {
     std::printf("# hxccl_perf op=%s nranks=%d iters=%d (median of rank-max)\n", op.c_str(), n,
                 iters);
@@ -71,7 +75,7 @@ int main(int argc, char** argv) {
     // S = total array size (nccl-tests); allgather/reducescatter use bytes/n per rank
     size_t count = bytes / sizeof(float);
     size_t per = std::max<size_t>(1, count / n);
-    std::vector<float> a(op == "allgather" ? per : count, 1.0f), b(count + per * n, 0.0f);
+    std::vector<float> a(op == "allgather" || op == "gather" ? per : count, 1.0f), b(count + per * n, 0.0f);
     std::function<void()> h, m;
     if (op == "allreduce") {
       h = [&] { hxcclAllReduce(a.data(), b.data(), count, hxcclFloat32, hxcclSum, c, nullptr); };
@@ -93,13 +97,49 @@ int main(int argc, char** argv) {
         MPI_Reduce_scatter_block(a.data(), b.data(), (int)per, MPI_FLOAT, MPI_SUM,
                                  MPI_COMM_WORLD);
       };
+    } else if (op == "reduce") {
+      h = [&] { hxcclReduce(a.data(), b.data(), count, hxcclFloat32, hxcclSum, 0, c, nullptr); };
+      m = [&] {
+        MPI_Reduce(a.data(), b.data(), (int)count, MPI_FLOAT, MPI_SUM, 0, MPI_COMM_WORLD);
+      };
+    } else if (op == "gather") {
+      h = [&] { hxcclGather(a.data(), b.data(), per, hxcclFloat32, 0, c, nullptr); };
+      m = [&] {
+        MPI_Gather(a.data(), (int)per, MPI_FLOAT, b.data(), (int)per, MPI_FLOAT, 0,
+                   MPI_COMM_WORLD);
+      };
+    } else if (op == "scatter") {
+      a.assign(per * n, 1.0f);
+      h = [&] { hxcclScatter(a.data(), b.data(), per, hxcclFloat32, 0, c, nullptr); };
+      m = [&] {
+        MPI_Scatter(a.data(), (int)per, MPI_FLOAT, b.data(), (int)per, MPI_FLOAT, 0,
+                    MPI_COMM_WORLD);
+      };
+    } else if (op == "alltoall") {
+      a.assign(per * n, 1.0f);
+      h = [&] { hxcclAlltoAll(a.data(), b.data(), per, hxcclFloat32, c, nullptr); };
+      m = [&] {
+        MPI_Alltoall(a.data(), (int)per, MPI_FLOAT, b.data(), (int)per, MPI_FLOAT,
+                     MPI_COMM_WORLD);
+      };
+    } else if (op == "sendrecv") {
+      const int right = (rank + 1) % n, left = (rank + n - 1) % n;
+      h = [&] {
+        hxcclGroupStart();
+        hxcclSend(a.data(), count, hxcclFloat32, right, c, nullptr);
+        hxcclRecv(b.data(), count, hxcclFloat32, left, c, nullptr);
+        hxcclGroupEnd();
+      };
+      m = [&] {
+        MPI_Sendrecv(a.data(), (int)count, MPI_FLOAT, right, 0, b.data(), (int)count,
+                     MPI_FLOAT, left, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      };
     } else {
       h = [&] { hxcclBroadcast(a.data(), a.data(), count, hxcclFloat32, 0, c, nullptr); };
       m = [&] { MPI_Bcast(a.data(), (int)count, MPI_FLOAT, 0, MPI_COMM_WORLD); };
     }
-    const double S = static_cast<double>(op == "allgather" || op == "reducescatter"
-                                             ? per * n * sizeof(float)
-                                             : count * sizeof(float));
+    const double S =
+        static_cast<double>(per_rank ? per * n * sizeof(float) : count * sizeof(float));
     const double hu = median_us(h, iters), mu = median_us(m, iters);
     const char* algo = "-";
     if (op == "allreduce") {
@@ -108,7 +148,7 @@ int main(int argc, char** argv) {
     }
     if (rank == 0)
       std::printf("%12.0f %12zu %10.1f %9.3f %9.3f %10.1f %9.3f %9.3f %6s\n", S,
-                  op == "allgather" || op == "reducescatter" ? per : count, hu, S / hu / 1e3,
+                  per_rank ? per : count, hu, S / hu / 1e3,
                   S / hu / 1e3 * bus, mu, S / mu / 1e3, S / mu / 1e3 * bus, algo);
   }
   hxcclCommDestroy(c);

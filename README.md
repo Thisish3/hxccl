@@ -2,32 +2,61 @@
 
 A small NCCL-style collective communication library, built step by step to understand how NCCL/RCCL work and to compare against them.
 
-> **Status: A (core) done.** CPU buffers over OpenMPI. GPU direct transport (B), PyTorch `ProcessGroup` backend (C) and the comparison with RCCL/NCCL on real multi-GPU hardware (D) are next. Not affiliated with NVIDIA NCCL, AMD RCCL or Huawei HCCL.
+> **Status: A (core) and A2 (full CPU-side NCCL/RCCL API) done.** CPU buffers over OpenMPI. GPU direct transport (B), PyTorch `ProcessGroup` backend (C) and the comparison with RCCL/NCCL on real multi-GPU hardware (D) are next. Not affiliated with NVIDIA NCCL, AMD RCCL or Huawei HCCL.
 
 ## API
 
-Same shape and argument order as NCCL (`nccl.h`), with an `hxccl` prefix:
+Same names, numbering and argument order as NCCL v2.32.3 (`nccl.h`), with an `hxccl` prefix. Result codes, datatypes and ops have NCCL's numeric values.
 
 ```c
 hxcclComm_t comm;
-hxcclCommInitMPI(&comm, MPI_COMM_WORLD);          // or hxcclGetUniqueId + hxcclCommInitRank
+hxcclCommInitMPI(&comm, MPI_COMM_WORLD);          // or hxcclGetUniqueId + hxcclCommInitRank[Config]
 hxcclAllReduce(send, recv, count, hxcclFloat32, hxcclSum, comm, /*stream*/ NULL);
-hxcclAllGather / hxcclReduceScatter / hxcclBroadcast
-hxcclCommGetStats(comm, &bytes_sent, &msgs_sent);  // used by the traffic tests
+hxcclGroupStart();                                 // Send/Recv pairs that must progress together
+hxcclSend(out, n, hxcclFloat32, right, comm, NULL);
+hxcclRecv(in, n, hxcclFloat32, left, comm, NULL);
+hxcclGroupEnd();
 hxcclCommDestroy(comm);
 ```
 
-Datatypes: int32, float32, float64. Ops: sum, prod, max, min. In-place calls follow NCCL's definitions.
+| Area | Implemented |
+|---|---|
+| Collectives | AllReduce, AllGather, ReduceScatter, Broadcast, Bcast, Reduce, Gather, Scatter, AlltoAll; RCCL's AllToAll and AllToAllv |
+| Point-to-point | Send, Recv, GroupStart, GroupEnd (nested groups run at the outermost End) |
+| Datatypes | all 12: int8/uint8/int32/uint32/int64/uint64, fp16, bf16, fp8 e4m3/e5m2 (software conversion), fp32, fp64 |
+| Ops | sum, prod, max, min, avg, RedOpCreatePreMulSum / RedOpDestroy |
+| Communicator | InitRank, InitRankConfig, Split, Shrink, Abort, Finalize, Destroy, GetAsyncError, Count, UserRank, GetVersion |
+
+Behaviour worth knowing:
+
+- **Send/Recv outside a group block.** Two ranks that both Send then Recv a large message wait for each other forever, as in NCCL. Put them in a group.
+- **Avg follows NCCL** (`src/enqueue/enqueue.cc`): integers are summed, then divided by N (truncating toward zero). Floats are first multiplied by 1/N (rounded to the datatype), then summed. For example, two fp16 values of 60000 average to 60000, not to inf.
+- **fp8 overflow is undefined here.** e4m3 values beyond 448 become NaN and IEEE-style types become inf. NCCL's mode was not checked; B will compare the two on a GPU.
+- **AllToAllv does one extra `MPI_Allreduce`** before sending. Block sizes differ per rank, so ranks first agree on whether any argument is invalid, and then all of them reject together instead of leaving the others waiting.
+- **Abort is local.** It frees hxccl's state without talking to peers and leaks the MPI communicator on purpose.
+
+Moved to later stages, because they need GPU memory, streams, or a socket bootstrap:
+
+| API | Stage |
+|---|---|
+| MemAlloc/Free, CommRegister, Window*, CommCuDevice, MemStats, InitAll, PutSignal/Signal/WaitSignal, non-blocking communicators, Suspend/Resume | B (GPU) |
+| AllReduceWithBias (RCCL) | D (needs RCCL's actual output to pin the meaning of `acc`) |
+| CommGrow, InitRankScalable, CommGetUniqueId, Revoke, GroupSimulateEnd, Param*, per-collective `*Config`, SetEncryption, CommDump | E (bootstrap, tuner) |
 
 ## Design
 
 ```
-api.cc        argument checks, error strings (hxcclGetLastError)
+api*.cc       public functions: check arguments now, run via dispatch (now, or at GroupEnd)
+checks.cc     shared argument checks; resolves Avg / PreMulSum into an OpPlan
+group.cc      group queue; Send/Recv are posted with MPI_Isend/Irecv, then waited together
+reduce.cc     elementwise reduction for 12 dtypes; fp.h has the fp16/bf16/fp8 conversions
 select.cc     allreduce algorithm by size: recursive doubling < 64 KB, ring above (HXCCL_ALGO=ring|rd forces one)
 algo_ring.cc  ring allreduce (reduce-scatter + all-gather), allgather, reducescatter
 algo_rd.cc    recursive doubling; non-power-of-two N folds the extra ranks into partners first
 algo_bcast.cc binomial tree < 512 KB, 512 KB-segment chain above
-transport_*   point-to-point layer; algorithms only see Transport (A: MPI_Sendrecv)
+algo_rooted.cc reduce (mirror of bcast), gather, scatter
+algo_alltoall.cc pairwise exchange: step s sends to r+s, receives from r−s
+transport_*   point-to-point layer; algorithms only see Transport (MPI_Sendrecv, Isend/Irecv)
 ```
 
 Algorithms never call MPI directly, so the GPU IPC transport in B can be dropped in without touching them.
@@ -90,3 +119,22 @@ Not verified:
 - **Why N = 8 is unstable.** Eight ranks on 4 performance + 4 efficiency cores is one candidate, but it was not tested.
 - **Why bandwidth drops at 64 MB.** Cache and memory effects are possible, but they were not measured.
 - **Which algorithm OpenMPI picks at each size.** Its `coll/tuned` decision was not inspected.
+
+## Measurements (A2: other collectives, CPU, shared memory)
+
+Same machine, build and method as above. Date: 2026-11-08. N = 4. Raw output is in `docs/bench/{reduce,gather,scatter,alltoall,sendrecv}_np4.txt`.
+
+busbw factors come from the `*GetBw` functions in nccl-tests `src/*.cu`: Reduce and SendRecv use 1. Gather, Scatter and AlltoAll use (N−1)/N, with S = count per rank × N.
+
+hxccl time ÷ OpenMPI time:
+
+| size | Reduce | Gather | Scatter | AlltoAll | SendRecv |
+|---:|---:|---:|---:|---:|---:|
+| 64 KB | 1.59 | 0.78 | 0.45 | 1.27 | 1.10 |
+| 1 MB | 1.09 | 0.94 | 1.48 | 1.05 | 1.09 |
+| 4 MB | 0.78 | 0.93 | 0.93 | 0.95 | 1.01 |
+| 16 MB | 0.82 | 1.09 | 1.03 | 0.88 | 1.01 |
+| 64 MB | 0.83 | 1.02 | 0.88 | 0.96 | 1.08 |
+
+- Each cell comes from one run of 20 iterations. Run-to-run spread was not measured for these collectives.
+- The large deviations at 64 KB and 1 MB (Reduce 1.59, Scatter 0.45 and 1.48) were not investigated. OpenMPI's algorithm choice at those sizes was not inspected either.
