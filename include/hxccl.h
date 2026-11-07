@@ -1,8 +1,9 @@
-/* hxccl: a small NCCL-style collective library (A: CPU buffers over MPI). */
+/* hxccl: a small NCCL-style collective library (CPU buffers over MPI). */
 #ifndef HXCCL_H_
 #define HXCCL_H_
 
 #include <mpi.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -18,15 +19,64 @@ typedef void* hxcclStream_t; /* ignored in A; cudaStream_t / hipStream_t in B */
 
 typedef enum {
   hxcclSuccess = 0,
-  hxcclInvalidArgument = 1,
+  hxcclUnhandledCudaError = 1,
   hxcclSystemError = 2,
   hxcclInternalError = 3,
-  hxcclInvalidUsage = 4,
+  hxcclInvalidArgument = 4,
+  hxcclInvalidUsage = 5,
+  hxcclRemoteError = 6,
+  hxcclInProgress = 7,
+  hxcclTimeout = 8,
+  hxcclNumResults = 9
 } hxcclResult_t;
 
-typedef enum { hxcclInt32 = 0, hxcclFloat32 = 1, hxcclFloat64 = 2 } hxcclDataType_t;
-typedef enum { hxcclSum = 0, hxcclProd = 1, hxcclMax = 2, hxcclMin = 3 } hxcclRedOp_t;
+/* Same numbering as nccl.h v2.32.3. */
+typedef enum {
+  hxcclInt8 = 0, hxcclChar = 0,
+  hxcclUint8 = 1,
+  hxcclInt32 = 2, hxcclInt = 2,
+  hxcclUint32 = 3,
+  hxcclInt64 = 4,
+  hxcclUint64 = 5,
+  hxcclFloat16 = 6, hxcclHalf = 6,
+  hxcclFloat32 = 7, hxcclFloat = 7,
+  hxcclFloat64 = 8, hxcclDouble = 8,
+  hxcclBfloat16 = 9,
+  hxcclFloat8e4m3 = 10,
+  hxcclFloat8e5m2 = 11,
+  hxcclNumTypes = 12
+} hxcclDataType_t;
 
+typedef enum {
+  hxcclSum = 0,
+  hxcclProd = 1,
+  hxcclMax = 2,
+  hxcclMin = 3,
+  hxcclAvg = 4,
+  hxcclNumOps = 5, /* user-created ops are hxcclNumOps + index */
+  hxcclMaxRedOp = 0x7fffffff
+} hxcclRedOp_t;
+
+typedef enum { hxcclScalarDevice = 0, hxcclScalarHostImmediate = 1 } hxcclScalarResidence_t;
+
+#define HXCCL_SPLIT_NOCOLOR -1
+#define HXCCL_VERSION(X, Y, Z) \
+  (((X) <= 2 && (Y) <= 8) ? (X) * 1000 + (Y) * 100 + (Z) : (X) * 10000 + (Y) * 100 + (Z))
+#define HXCCL_VERSION_CODE HXCCL_VERSION(0, 2, 0)
+
+#define HXCCL_CONFIG_UNDEF_INT INT_MIN
+#define HXCCL_CONFIG_MAGIC 0x6878636cu
+typedef struct {
+  size_t size;
+  unsigned int magic;
+  unsigned int version;
+  int blocking; /* only 1 (or unset) in A2; non-blocking arrives in B */
+  const char* commName;
+} hxcclConfig_t;
+#define HXCCL_CONFIG_INITIALIZER \
+  {sizeof(hxcclConfig_t), HXCCL_CONFIG_MAGIC, HXCCL_VERSION_CODE, HXCCL_CONFIG_UNDEF_INT, NULL}
+
+hxcclResult_t hxcclGetVersion(int* version);
 hxcclResult_t hxcclGetUniqueId(hxcclUniqueId* id);
 /* All ranks of MPI_COMM_WORLD must call this together, in the same order. */
 hxcclResult_t hxcclCommInitRank(hxcclComm_t* comm, int nranks, hxcclUniqueId id, int rank);

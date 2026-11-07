@@ -91,12 +91,23 @@ hxcclResult_t hxcclCommUserRank(hxcclComm_t comm, int* rank) {
 const char* hxcclGetErrorString(hxcclResult_t r) {
   switch (r) {
     case hxcclSuccess: return "no error";
-    case hxcclInvalidArgument: return "invalid argument";
+    case hxcclUnhandledCudaError: return "unhandled device error";
     case hxcclSystemError: return "system (MPI) error";
     case hxcclInternalError: return "internal error";
+    case hxcclInvalidArgument: return "invalid argument";
     case hxcclInvalidUsage: return "invalid usage";
+    case hxcclRemoteError: return "remote process error";
+    case hxcclInProgress: return "operation in progress";
+    case hxcclTimeout: return "timeout";
+    case hxcclNumResults: break;
   }
   return "unknown result";
+}
+
+hxcclResult_t hxcclGetVersion(int* version) {
+  if (!version) return hxcclInvalidArgument;
+  *version = HXCCL_VERSION_CODE;
+  return hxcclSuccess;
 }
 
 const char* hxcclGetLastError(hxcclComm_t comm) {
