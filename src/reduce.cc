@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
+#include <vector>
 
 #include "fp.h"
 
@@ -103,4 +105,46 @@ void reduce_into(void* dst, const void* src, size_t n, hxcclDataType_t dt, hxccl
   }
 #undef HX_CASE
 #undef HX_SMALL
+}
+
+void store_scalar(double v, hxcclDataType_t dt, void* out) {
+  const float f = static_cast<float>(v);
+  uint16_t h;
+  uint8_t b;
+  switch (dt) {
+    case hxcclFloat64: std::memcpy(out, &v, 8); break;
+    case hxcclFloat32: std::memcpy(out, &f, 4); break;
+    case hxcclFloat16: h = fp::float_to_half(f); std::memcpy(out, &h, 2); break;
+    case hxcclBfloat16: h = fp::float_to_bf16(f); std::memcpy(out, &h, 2); break;
+    case hxcclFloat8e4m3: b = fp::float_to_e4m3(f); std::memcpy(out, &b, 1); break;
+    case hxcclFloat8e5m2: b = fp::float_to_e5m2(f); std::memcpy(out, &b, 1); break;
+    default: break;
+  }
+}
+
+void scale_into(void* dst, const void* src, size_t n, hxcclDataType_t dt, const void* scalar) {
+  const size_t es = dtype_size(dt);
+  std::memcpy(dst, src, n * es);
+  std::vector<char> k(n * es);
+  for (size_t i = 0; i < n; ++i) std::memcpy(k.data() + i * es, scalar, es);
+  reduce_into(dst, k.data(), n, dt, hxcclProd);
+}
+
+void divide_trunc(void* buf, size_t n, hxcclDataType_t dt, int divisor) {
+#define HX_DIV(DT, T)                                                       \
+  case DT:                                                                  \
+    for (size_t i = 0; i < n; ++i)                                          \
+      static_cast<T*>(buf)[i] =                                             \
+          static_cast<T>(static_cast<T*>(buf)[i] / static_cast<T>(divisor)); \
+    break;
+  switch (dt) {
+    HX_DIV(hxcclInt8, int8_t)
+    HX_DIV(hxcclUint8, uint8_t)
+    HX_DIV(hxcclInt32, int32_t)
+    HX_DIV(hxcclUint32, uint32_t)
+    HX_DIV(hxcclInt64, int64_t)
+    HX_DIV(hxcclUint64, uint64_t)
+    default: break;
+  }
+#undef HX_DIV
 }

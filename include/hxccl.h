@@ -98,6 +98,12 @@ hxcclResult_t hxcclBroadcast(const void* sendbuff, void* recvbuff, size_t count,
                              hxcclDataType_t datatype, int root, hxcclComm_t comm,
                              hxcclStream_t stream);
 
+/* PreMulSum: sum of (input * scalar); usable only with `comm` and `datatype`. */
+hxcclResult_t hxcclRedOpCreatePreMulSum(hxcclRedOp_t* op, void* scalar,
+                                        hxcclDataType_t datatype,
+                                        hxcclScalarResidence_t residence, hxcclComm_t comm);
+hxcclResult_t hxcclRedOpDestroy(hxcclRedOp_t op, hxcclComm_t comm);
+
 const char* hxcclGetErrorString(hxcclResult_t result);
 const char* hxcclGetLastError(hxcclComm_t comm);
 hxcclResult_t hxcclCommGetStats(hxcclComm_t comm, uint64_t* bytes_sent, uint64_t* msgs_sent);
