@@ -111,6 +111,17 @@ hxcclResult_t hxcclScatter(const void* sendbuff, void* recvbuff, size_t count,
                            hxcclDataType_t datatype, int root, hxcclComm_t comm,
                            hxcclStream_t stream);
 
+/* Rank j's block is sendbuff + j*count; block from rank i lands at recvbuff + i*count. */
+hxcclResult_t hxcclAlltoAll(const void* sendbuff, void* recvbuff, size_t count,
+                            hxcclDataType_t datatype, hxcclComm_t comm, hxcclStream_t stream);
+/* RCCL spellings. AllToAllv counts and displacements are in elements. */
+hxcclResult_t hxcclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
+                            hxcclDataType_t datatype, hxcclComm_t comm, hxcclStream_t stream);
+hxcclResult_t hxcclAllToAllv(const void* sendbuff, const size_t sendcounts[],
+                             const size_t sdispls[], void* recvbuff, const size_t recvcounts[],
+                             const size_t rdispls[], hxcclDataType_t datatype,
+                             hxcclComm_t comm, hxcclStream_t stream);
+
 /* Send/Recv block until done; pairs that must progress together go in a group. */
 hxcclResult_t hxcclSend(const void* sendbuff, size_t count, hxcclDataType_t datatype, int peer,
                         hxcclComm_t comm, hxcclStream_t stream);

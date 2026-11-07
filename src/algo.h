@@ -29,3 +29,7 @@ hxcclResult_t gather(Transport& tr, int rank, int n, const void* send, void* rec
                      size_t bytes_per, int root);
 hxcclResult_t scatter(Transport& tr, int rank, int n, const void* send, void* recv,
                       size_t bytes_per, int root);
+// byte counts and byte offsets per peer
+hxcclResult_t alltoallv(Transport& tr, int rank, int n, const char* send, const size_t* sbytes,
+                        const size_t* soff, char* recv, const size_t* rbytes,
+                        const size_t* roff);
