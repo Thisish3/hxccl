@@ -28,7 +28,7 @@ NCCL v2.32.3과 RCCL rocm-7.2.4의 공개 API 중 **CPU 버퍼와 MPI만으로 �
 | Send, Recv, GroupStart, GroupEnd | **A2** | MPI 비차단 송수신으로 구현 가능 |
 | dtype 12종, Avg, RedOpCreatePreMulSum, RedOpDestroy | **A2** | 소프트웨어 변환으로 가능 |
 | CommSplit, CommShrink, CommAbort, CommFinalize, CommGetAsyncError, CommInitRankConfig, GetVersion | **A2** | MPI communicator 연산으로 가능 |
-| AllReduceWithBias | **A2** | 단, `acc` 의미를 구현 전에 RCCL `src/collectives.cc`와 커널에서 확인한다. 확인 못 하면 A2에서 빼고 이유를 남긴다 |
+| AllReduceWithBias | D | 커널은 출력 버퍼에 쓸 때 `op(결과, acc[i])`를 저장한다(`src/device/common_kernel.h`, `d == 0`일 때만). ring의 어느 단계에서 몇 번 더해지는지는 소스만으로 확정하지 못했다. MI300X에서 RCCL 실행 결과를 본 뒤 그 의미대로 구현한다 |
 | MemAlloc/Free, CommRegister/Deregister, Window*, WinGetUserPtr, CommCuDevice, CommMemStats, CommInitAll(한 프로세스 여러 GPU), PutSignal/Signal/WaitSignal, 비차단 communicator(`blocking=0`, InProgress), Suspend/Resume | B | GPU 메모리·스트림이 있어야 의미가 있다 |
 | CommGrow, CommInitRankScalable, CommGetUniqueId, CommRevoke, GroupSimulateEnd, Param*, 컬렉티브 `*Config` 변형, Timeout, SetEncryption, RCCL CommDump | E | 소켓 부트스트랩·튜너 모델이 있어야 의미가 있다 |
 
@@ -37,7 +37,7 @@ NCCL v2.32.3과 RCCL rocm-7.2.4의 공개 API 중 **CPU 버퍼와 MPI만으로 �
 - 결과 코드와 dtype 숫자를 **NCCL과 같게 바꾼다**(A의 `InvalidArgument 1`, `Float32 1` 등은 깨진다. 아직 외부 사용자가 없고, C단계 PyTorch 백엔드가 NCCL 숫자를 그대로 넘길 수 있게 된다). `hxcclUnhandledCudaError`, `hxcclRemoteError`, `hxcclInProgress`, `hxcclTimeout`은 값만 정의한다.
 - 새 함수는 2절 시그니처에서 `nccl` → `hxccl`, `cudaStream_t` → `hxcclStream_t`.
 - `hxcclConfig_t`: `size, magic, version, blocking, commName`만 둔다. `HXCCL_CONFIG_INITIALIZER`. A2는 `blocking == 1`(또는 미설정)만 받고 `0`이면 `hxcclInvalidArgument`("non-blocking communicators arrive in B").
-- `hxcclGetVersion`: `0.2.0` → `200`(NCCL 방식 `major*10000 + minor*100 + patch`). NCCL 버전 공식은 구현 전 `NCCL_VERSION` 매크로로 확인한다.
+- `hxcclGetVersion`: NCCL 매크로 `NCCL_VERSION(X,Y,Z) = (X <= 2 && Y <= 8) ? X*1000 + Y*100 + Z : X*10000 + Y*100 + Z`(확인함, 2.32.3 → 23203)를 그대로 쓴다. hxccl 0.2.0 → `200`.
 
 ## 5. 설계
 
@@ -74,7 +74,7 @@ virtual hxcclResult_t waitall() = 0;   // 지금까지 걸어 둔 isend/irecv �
 ### 5.4 dtype과 리덕션
 
 - `reduce_into`를 dtype 12종으로 넓힌다. 정수 8종은 그대로, fp16/bf16은 float로 계산 후 RNE 변환, fp8 e4m3/e5m2는 half 값으로 계산 후 변환(2절의 NCCL 방식). 변환 함수는 `src/fp.h`에 순수 함수로 두고 단위 테스트로 고정한다.
-- fp8 변환 규칙: OCP FP8(e4m3: bias 7, 최대 448, inf 없음 / e5m2: bias 15, inf 있음), RNE. **범위를 넘는 값의 처리**(포화인지 NaN인지)는 NCCL이 쓰는 `__nv_fp8_e4m3(__half)` 생성자의 모드를 구현 전에 CUDA `cuda_fp8.hpp`에서 확인해 그대로 따른다. 확인 결과를 스펙에 덧붙인다.
+- fp8 변환 규칙: OCP FP8(e4m3: bias 7, 최대 448, inf 없음 / e5m2: bias 15, inf 있음), RNE. **범위를 넘는 값의 처리**(최대값으로 자르는지, NaN인지)는 NCCL이 쓰는 `__nv_fp8_e4m3(__half)` 생성자의 모드에 달려 있는데, 그 헤더(`cuda_fp8.hpp`)는 CUDA 툴킷에만 있어 아직 확인하지 못했다. A2는 범위를 넘는 값을 정의하지 않고 테스트 입력에서 피한다. B에서 3060 Ti로 같은 입력을 NCCL과 hxccl에 넣어 비교하고 그 결과대로 맞춘다.
 - Avg: 정수형은 합 후 0 방향 버림 나눗셈, 실수형은 각 입력에 `(dtype)(1/N)`을 곱하고 합한다(2절). 실수형 결과는 "합 / N"과 비트가 다를 수 있으며, 테스트 기준값도 같은 순서로 계산한다.
 - PreMulSum: communicator별 사용자 op 표. `HostImmediate`는 값 복사, `Device`는 포인터 저장 후 collective 호출 시 읽는다(CPU에서는 둘 다 호스트 메모리). 다른 comm·다른 dtype으로 쓰면 `hxcclInvalidArgument`. 파괴된 op 사용도 `hxcclInvalidArgument`.
 
