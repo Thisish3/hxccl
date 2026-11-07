@@ -21,3 +21,11 @@ constexpr size_t kChainMinBytes = 512 * 1024;
 constexpr size_t kChainSegment = 512 * 1024;
 hxcclResult_t bcast(Transport& tr, int rank, int n, const void* send, void* recv,
                     size_t bytes, int root);
+
+// Rooted collectives. Non-root `recv` (reduce, gather) and `send` (scatter) may be NULL.
+hxcclResult_t reduce_root(Transport& tr, int rank, int n, const void* send, void* recv,
+                          size_t count, hxcclDataType_t dt, hxcclRedOp_t op, int root);
+hxcclResult_t gather(Transport& tr, int rank, int n, const void* send, void* recv,
+                     size_t bytes_per, int root);
+hxcclResult_t scatter(Transport& tr, int rank, int n, const void* send, void* recv,
+                      size_t bytes_per, int root);

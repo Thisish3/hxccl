@@ -98,6 +98,19 @@ hxcclResult_t hxcclBroadcast(const void* sendbuff, void* recvbuff, size_t count,
                              hxcclDataType_t datatype, int root, hxcclComm_t comm,
                              hxcclStream_t stream);
 
+/* Rooted collectives: non-root recvbuff (Reduce, Gather) and sendbuff (Scatter) may be NULL. */
+hxcclResult_t hxcclReduce(const void* sendbuff, void* recvbuff, size_t count,
+                          hxcclDataType_t datatype, hxcclRedOp_t op, int root, hxcclComm_t comm,
+                          hxcclStream_t stream);
+hxcclResult_t hxcclBcast(void* buff, size_t count, hxcclDataType_t datatype, int root,
+                         hxcclComm_t comm, hxcclStream_t stream);
+hxcclResult_t hxcclGather(const void* sendbuff, void* recvbuff, size_t count,
+                          hxcclDataType_t datatype, int root, hxcclComm_t comm,
+                          hxcclStream_t stream);
+hxcclResult_t hxcclScatter(const void* sendbuff, void* recvbuff, size_t count,
+                           hxcclDataType_t datatype, int root, hxcclComm_t comm,
+                           hxcclStream_t stream);
+
 /* Send/Recv block until done; pairs that must progress together go in a group. */
 hxcclResult_t hxcclSend(const void* sendbuff, size_t count, hxcclDataType_t datatype, int peer,
                         hxcclComm_t comm, hxcclStream_t stream);
