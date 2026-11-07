@@ -16,6 +16,10 @@ struct FailingTransport : Transport {
   hxcclResult_t sendrecv(int, const void*, size_t, int, void*, size_t) override { return fail(); }
   hxcclResult_t send(int, const void*, size_t) override { return fail(); }
   hxcclResult_t recv(int, void*, size_t) override { return fail(); }
+  hxcclResult_t isend(int, const void*, size_t, int) override { return fail(); }
+  hxcclResult_t irecv(int, void*, size_t, int) override { return fail(); }
+  hxcclResult_t waitall() override { return hxcclSuccess; }
+  void cancel_all() override {}
 };
 }  // namespace
 

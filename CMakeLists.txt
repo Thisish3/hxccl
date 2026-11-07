@@ -23,6 +23,7 @@ function(hxccl_mpi_test name)
     add_test(NAME ${name}_np${np}
              COMMAND ${MPIEXEC_EXECUTABLE} --oversubscribe ${MPIEXEC_NUMPROC_FLAG} ${np}
                      $<TARGET_FILE:${name}>)
+    set_tests_properties(${name}_np${np} PROPERTIES TIMEOUT 60)
   endforeach()
 endfunction()
 file(GLOB TEST_SRC CONFIGURE_DEPENDS tests/test_*.cc)

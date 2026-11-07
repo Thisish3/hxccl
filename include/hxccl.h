@@ -98,6 +98,15 @@ hxcclResult_t hxcclBroadcast(const void* sendbuff, void* recvbuff, size_t count,
                              hxcclDataType_t datatype, int root, hxcclComm_t comm,
                              hxcclStream_t stream);
 
+/* Send/Recv block until done; pairs that must progress together go in a group. */
+hxcclResult_t hxcclSend(const void* sendbuff, size_t count, hxcclDataType_t datatype, int peer,
+                        hxcclComm_t comm, hxcclStream_t stream);
+hxcclResult_t hxcclRecv(void* recvbuff, size_t count, hxcclDataType_t datatype, int peer,
+                        hxcclComm_t comm, hxcclStream_t stream);
+/* Calls between GroupStart and the outermost GroupEnd run at that GroupEnd. */
+hxcclResult_t hxcclGroupStart(void);
+hxcclResult_t hxcclGroupEnd(void);
+
 /* PreMulSum: sum of (input * scalar); usable only with `comm` and `datatype`. */
 hxcclResult_t hxcclRedOpCreatePreMulSum(hxcclRedOp_t* op, void* scalar,
                                         hxcclDataType_t datatype,
