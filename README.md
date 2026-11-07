@@ -32,7 +32,8 @@ Behaviour worth knowing:
 - **Send/Recv outside a group block.** Two ranks that both Send then Recv a large message wait for each other forever, as in NCCL. Put them in a group.
 - **Avg follows NCCL** (`src/enqueue/enqueue.cc`): integers are summed, then divided by N (truncating toward zero). Floats are first multiplied by 1/N (rounded to the datatype), then summed. For example, two fp16 values of 60000 average to 60000, not to inf.
 - **fp8 overflow is undefined here.** e4m3 values beyond 448 become NaN and IEEE-style types become inf. NCCL's mode was not checked; B will compare the two on a GPU.
-- **AllToAllv does one extra `MPI_Allreduce`** before sending. Block sizes differ per rank, so ranks first agree on whether any argument is invalid, and then all of them reject together instead of leaving the others waiting.
+- **AllToAllv does one extra `MPI_Allreduce`** before sending. Block sizes differ per rank, so ranks first agree on whether any argument is invalid, and then all of them reject together instead of leaving the others waiting. The agreement runs at call time, also inside a group.
+- **Known problems** are listed in [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md).
 - **Abort is local.** It frees hxccl's state without talking to peers and leaks the MPI communicator on purpose.
 
 Moved to later stages, because they need GPU memory, streams, or a socket bootstrap:

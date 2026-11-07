@@ -36,7 +36,8 @@ void apply(T* d, const T* s, size_t n, hxcclRedOp_t op) {
   }
 }
 
-// fp16/bf16/fp8: widen to float, reduce, round back (NCCL does the same, fp8 via half).
+// fp16/bf16/fp8: widen to float, reduce, round back. NCCL computes fp8 in half; for one
+// binary op on fp8 inputs both are exact before the final rounding, so results match.
 template <typename S, float (*ToF)(S), S (*FromF)(float)>
 void apply_small(S* d, const S* s, size_t n, hxcclRedOp_t op) {
   for (size_t i = 0; i < n; ++i) {

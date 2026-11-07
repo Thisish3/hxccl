@@ -66,6 +66,7 @@ hxcclResult_t MpiTransport::isend(int to, const void* buf, size_t bytes, int tag
       MPI_Isend(buf, static_cast<int>(bytes), MPI_BYTE, to, tag, comm_, &req), "MPI_Isend");
   if (r != hxcclSuccess) return r;
   pending_.push_back(req);
+  pending_is_send_.push_back(true);
   bytes_sent += bytes;
   ++msgs_sent;
   return hxcclSuccess;
@@ -79,7 +80,10 @@ hxcclResult_t MpiTransport::irecv(int from, void* buf, size_t bytes, int tag) {
   MPI_Request req;
   hxcclResult_t r = check(
       MPI_Irecv(buf, static_cast<int>(bytes), MPI_BYTE, from, tag, comm_, &req), "MPI_Irecv");
-  if (r == hxcclSuccess) pending_.push_back(req);
+  if (r == hxcclSuccess) {
+    pending_.push_back(req);
+    pending_is_send_.push_back(false);
+  }
   return r;
 }
 
@@ -88,6 +92,7 @@ hxcclResult_t MpiTransport::waitall() {
   std::vector<MPI_Status> st(pending_.size());
   const int rc = MPI_Waitall(static_cast<int>(pending_.size()), pending_.data(), st.data());
   pending_.clear();
+  pending_is_send_.clear();
   if (rc == MPI_ERR_IN_STATUS)
     for (const MPI_Status& s : st)
       if (s.MPI_ERROR != MPI_SUCCESS) return check(s.MPI_ERROR, "MPI_Waitall");
@@ -95,9 +100,11 @@ hxcclResult_t MpiTransport::waitall() {
 }
 
 void MpiTransport::cancel_all() {
-  for (MPI_Request& r : pending_) {
-    MPI_Cancel(&r);
-    MPI_Request_free(&r);
+  // MPI-4 deprecates cancelling sends: let them finish in the background instead
+  for (size_t i = 0; i < pending_.size(); ++i) {
+    if (!pending_is_send_[i]) MPI_Cancel(&pending_[i]);
+    MPI_Request_free(&pending_[i]);
   }
   pending_.clear();
+  pending_is_send_.clear();
 }

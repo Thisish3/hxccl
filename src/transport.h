@@ -44,4 +44,5 @@ class MpiTransport : public Transport {
   hxcclResult_t check(int rc, const char* what);
   MPI_Comm comm_;
   std::vector<MPI_Request> pending_;
+  std::vector<bool> pending_is_send_;
 };

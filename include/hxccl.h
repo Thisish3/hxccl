@@ -125,7 +125,8 @@ hxcclResult_t hxcclScatter(const void* sendbuff, void* recvbuff, size_t count,
 /* Rank j's block is sendbuff + j*count; block from rank i lands at recvbuff + i*count. */
 hxcclResult_t hxcclAlltoAll(const void* sendbuff, void* recvbuff, size_t count,
                             hxcclDataType_t datatype, hxcclComm_t comm, hxcclStream_t stream);
-/* RCCL spellings. AllToAllv counts and displacements are in elements. */
+/* RCCL spellings. AllToAllv counts and displacements are in elements. AllToAllv first
+ * agrees on argument validity with one MPI_Allreduce at call time, also inside a group. */
 hxcclResult_t hxcclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
                             hxcclDataType_t datatype, hxcclComm_t comm, hxcclStream_t stream);
 hxcclResult_t hxcclAllToAllv(const void* sendbuff, const size_t sendcounts[],
