@@ -9,6 +9,7 @@
 hxcclResult_t check_args(hxcclComm* c, const void* send, const void* recv, size_t count,
                          size_t multiplier, hxcclDataType_t dt) {
   if (!c) return hxcclInvalidArgument;
+  if (c->finalized) return comm_fail(c, hxcclInvalidUsage, "communicator was finalized");
   const size_t es = dtype_size(dt);
   if (es == 0) return comm_fail(c, hxcclInvalidArgument, "unknown datatype");
   if (count != 0 && count > SIZE_MAX / es / multiplier)

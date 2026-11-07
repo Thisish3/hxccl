@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstring>
 #include <random>
+#include <vector>
 
 namespace {
 
@@ -26,10 +27,22 @@ uint32_t fnv1a(const hxcclUniqueId& id) {
   return h & 0x7fffffffu;
 }
 
+hxcclResult_t check_config(const hxcclConfig_t* cfg) {
+  if (!cfg) return hxcclSuccess;
+  if (cfg->size != sizeof(hxcclConfig_t) || cfg->magic != HXCCL_CONFIG_MAGIC)
+    return hxcclInvalidArgument;  // not built with HXCCL_CONFIG_INITIALIZER
+  if (cfg->blocking == 0) return hxcclInvalidArgument;  // non-blocking arrives in B
+  return hxcclSuccess;
+}
+
 }  // namespace
 
 hxcclResult_t comm_fail(hxcclComm* c, hxcclResult_t r, const std::string& msg) {
-  if (c) c->last_error = msg;
+  if (c) {
+    c->last_error = msg;
+    if (r == hxcclSystemError || r == hxcclInternalError || r == hxcclRemoteError)
+      c->async_error = r;
+  }
   return r;
 }
 
@@ -66,6 +79,73 @@ hxcclResult_t hxcclCommInitRank(hxcclComm_t* comm, int nranks, hxcclUniqueId id,
     return hxcclInvalidUsage;
   }
   return make_comm(comm, sub);
+}
+
+hxcclResult_t hxcclCommInitRankConfig(hxcclComm_t* comm, int nranks, hxcclUniqueId id, int rank,
+                                      hxcclConfig_t* config) {
+  if (hxcclResult_t r = check_config(config)) return r;
+  return hxcclCommInitRank(comm, nranks, id, rank);
+}
+
+hxcclResult_t hxcclCommSplit(hxcclComm_t comm, int color, int key, hxcclComm_t* newcomm,
+                             hxcclConfig_t* config) {
+  if (!comm || !newcomm || (color < 0 && color != HXCCL_SPLIT_NOCOLOR))
+    return hxcclInvalidArgument;
+  if (hxcclResult_t r = check_config(config)) return comm_fail(comm, r, "unsupported config");
+  MPI_Comm sub;
+  if (MPI_Comm_split(comm->mpi, color == HXCCL_SPLIT_NOCOLOR ? MPI_UNDEFINED : color, key,
+                     &sub) != MPI_SUCCESS)
+    return comm_fail(comm, hxcclSystemError, "MPI_Comm_split failed");
+  if (sub == MPI_COMM_NULL) {
+    *newcomm = nullptr;
+    return hxcclSuccess;
+  }
+  return make_comm(newcomm, sub);
+}
+
+hxcclResult_t hxcclCommShrink(hxcclComm_t comm, int* excl, int nexcl, hxcclComm_t* newcomm,
+                              hxcclConfig_t* config, int flags) {
+  if (!comm || !newcomm || nexcl < 0 || (nexcl > 0 && !excl)) return hxcclInvalidArgument;
+  if (flags != 0)
+    return comm_fail(comm, hxcclInvalidArgument, "shrinkFlags other than 0 arrive in E");
+  if (hxcclResult_t r = check_config(config)) return comm_fail(comm, r, "unsupported config");
+  std::vector<bool> seen(comm->nranks, false);
+  for (int i = 0; i < nexcl; ++i) {
+    if (excl[i] < 0 || excl[i] >= comm->nranks || seen[excl[i]])
+      return comm_fail(comm, hxcclInvalidArgument, "excluded rank out of range or repeated");
+    seen[excl[i]] = true;
+  }
+  if (seen[comm->rank])
+    return comm_fail(comm, hxcclInvalidUsage, "excluded ranks must not call Shrink");
+  MPI_Group all, kept;
+  MPI_Comm sub;
+  MPI_Comm_group(comm->mpi, &all);
+  MPI_Group_excl(all, nexcl, excl, &kept);
+  const int rc = MPI_Comm_create_group(comm->mpi, kept, /*tag=*/7, &sub);
+  MPI_Group_free(&kept);
+  MPI_Group_free(&all);
+  if (rc != MPI_SUCCESS) return comm_fail(comm, hxcclSystemError, "MPI_Comm_create_group failed");
+  return make_comm(newcomm, sub);
+}
+
+hxcclResult_t hxcclCommAbort(hxcclComm_t comm) {
+  if (!comm) return hxcclInvalidArgument;
+  // local teardown only: MPI_Comm_free may need peers, so the MPI handle is leaked on purpose
+  comm->tr.reset();
+  delete comm;
+  return hxcclSuccess;
+}
+
+hxcclResult_t hxcclCommFinalize(hxcclComm_t comm) {
+  if (!comm) return hxcclInvalidArgument;
+  comm->finalized = true;  // every call runs to completion, so nothing is left in flight
+  return hxcclSuccess;
+}
+
+hxcclResult_t hxcclCommGetAsyncError(hxcclComm_t comm, hxcclResult_t* err) {
+  if (!comm || !err) return hxcclInvalidArgument;
+  *err = comm->async_error;
+  return hxcclSuccess;
 }
 
 hxcclResult_t hxcclCommDestroy(hxcclComm_t comm) {

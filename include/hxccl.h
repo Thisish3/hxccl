@@ -81,7 +81,18 @@ hxcclResult_t hxcclGetUniqueId(hxcclUniqueId* id);
 /* All ranks of MPI_COMM_WORLD must call this together, in the same order. */
 hxcclResult_t hxcclCommInitRank(hxcclComm_t* comm, int nranks, hxcclUniqueId id, int rank);
 hxcclResult_t hxcclCommInitMPI(hxcclComm_t* comm, MPI_Comm mpi);
+hxcclResult_t hxcclCommInitRankConfig(hxcclComm_t* comm, int nranks, hxcclUniqueId id,
+                                      int rank, hxcclConfig_t* config);
 hxcclResult_t hxcclCommDestroy(hxcclComm_t comm);
+/* color HXCCL_SPLIT_NOCOLOR leaves the caller out (*newcomm = NULL). */
+hxcclResult_t hxcclCommSplit(hxcclComm_t comm, int color, int key, hxcclComm_t* newcomm,
+                             hxcclConfig_t* config);
+/* Only the remaining ranks call Shrink, all with the same list. */
+hxcclResult_t hxcclCommShrink(hxcclComm_t comm, int* excludeRanksList, int excludeRanksCount,
+                              hxcclComm_t* newcomm, hxcclConfig_t* config, int shrinkFlags);
+hxcclResult_t hxcclCommAbort(hxcclComm_t comm); /* local; never waits for peers */
+hxcclResult_t hxcclCommFinalize(hxcclComm_t comm);
+hxcclResult_t hxcclCommGetAsyncError(hxcclComm_t comm, hxcclResult_t* asyncError);
 hxcclResult_t hxcclCommCount(hxcclComm_t comm, int* count);
 hxcclResult_t hxcclCommUserRank(hxcclComm_t comm, int* rank);
 

@@ -22,6 +22,8 @@ struct hxcclComm {
   std::unique_ptr<Transport> tr;
   std::string last_error;
   std::vector<UserOp> user_ops;
+  bool finalized = false;
+  hxcclResult_t async_error = hxcclSuccess;  // last transport-level failure
 };
 
 hxcclResult_t comm_fail(hxcclComm* c, hxcclResult_t r, const std::string& msg);
