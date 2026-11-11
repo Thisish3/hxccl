@@ -28,6 +28,7 @@ struct hxcclComm {
   std::string last_error;
   std::vector<UserOp> user_ops;
   int op_tag = 0;  // 1..0x7ffe, assigned per communicator in this process
+  uint64_t derived = 0;  // Split/Shrink calls so far: part of a socket child's comm id
   bool finalized = false;
   hxcclResult_t async_error = hxcclSuccess;  // last transport-level failure
 };

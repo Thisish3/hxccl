@@ -47,3 +47,7 @@
 ## E (소켓 부트스트랩, 브랜치 `e-socket`)
 
 - **E1** (Task E0) 스펙·계획은 데스크탑에서 사용자 요청("torchrun 지원 먼저")으로 썼다. 맥 Claude가 리뷰하지 않았다. `Net`/`MpiNet`을 추가하고 IPC 제어 메시지와 AllToAllv 합의를 그쪽으로 옮겼다. 동작은 바뀌지 않았다(CPU 78/78, CUDA 108/108 통과).
+- **E2** (Task E1) `hxcclGetUniqueId`/`hxcclCommInitRank`가 이제 항상 소켓 부트스트랩을 쓴다. MPI는 필요 없다. 그래서 `nranks > MPI_COMM_WORLD 크기` 검사를 뺐다. 기존 테스트 두 곳을 바꿨다.
+  - `test_errors`의 "모두가 rank 0이라고 주장" 기대값: rank 0만 성공 → 모든 rank가 `hxcclInvalidUsage`(겹친 rank로는 메시를 만들 수 없다).
+  - `MPI_Comm_get_errhandler(c->mpi)` 검사: MPI 통신기일 때만 한다(소켓 통신기에는 MPI 핸들이 없다).
+- **E3** (Task E1) 결과: CPU 빌드 156/156(MPI 78 + `HXCCL_BOOTSTRAP=socket` 78). 소켓 변형만 따로 3번 더 돌려 매번 78/78. CUDA 빌드 201/201(GPU 테스트의 소켓 변형 포함). 상대가 연결을 닫으면 그 상대가 걸린 요청만 실패시키고, 부트스트랩 connect는 30초 동안 재시도한다. 부트스트랩 timeout(오지 않는 rank 감지)은 넣지 않았다(스펙 2).

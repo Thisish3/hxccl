@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -46,6 +47,25 @@ class MpiTransport : public Transport {
   MPI_Comm comm_;
   std::vector<MPI_Request> pending_;
   std::vector<bool> pending_is_send_;
+};
+
+// Host buffers over a Net (socket communicators, spec E). Counts traffic like MpiTransport.
+class NetTransport : public Transport {
+ public:
+  explicit NetTransport(std::shared_ptr<Net> net) : net_(std::move(net)) {}
+  hxcclResult_t sendrecv(int to, const void* sbuf, size_t sbytes, int from, void* rbuf,
+                         size_t rbytes) override;
+  hxcclResult_t send(int to, const void* buf, size_t bytes) override;
+  hxcclResult_t recv(int from, void* buf, size_t bytes) override;
+  hxcclResult_t isend(int to, const void* buf, size_t bytes, int tag) override;
+  hxcclResult_t irecv(int from, void* buf, size_t bytes, int tag) override;
+  hxcclResult_t waitall() override;
+  void cancel_all() override;
+
+ private:
+  hxcclResult_t fail(hxcclResult_t r);
+  std::shared_ptr<Net> net_;
+  std::vector<int> pending_;
 };
 
 #ifdef HXCCL_CUDA

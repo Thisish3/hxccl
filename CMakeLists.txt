@@ -52,6 +52,11 @@ function(hxccl_mpi_test name)
              COMMAND ${MPIEXEC_EXECUTABLE} --oversubscribe ${MPIEXEC_NUMPROC_FLAG} ${np}
                      $<TARGET_FILE:${name}>)
     set_tests_properties(${name}_np${np} PROPERTIES TIMEOUT 60)
+    # the same test with hxcclCommInitMPI building socket communicators (spec E 4)
+    add_test(NAME ${name}_np${np}_sock
+             COMMAND ${MPIEXEC_EXECUTABLE} --oversubscribe -x HXCCL_BOOTSTRAP=socket
+                     ${MPIEXEC_NUMPROC_FLAG} ${np} $<TARGET_FILE:${name}>)
+    set_tests_properties(${name}_np${np}_sock PROPERTIES TIMEOUT 60)
   endforeach()
 endfunction()
 file(GLOB TEST_SRC CONFIGURE_DEPENDS tests/test_*.cc)
@@ -73,6 +78,10 @@ function(hxccl_gpu_test name)
              COMMAND ${MPIEXEC_EXECUTABLE} --oversubscribe -x HXCCL_IPC_CHUNK=4096
                      ${MPIEXEC_NUMPROC_FLAG} ${np} $<TARGET_FILE:${name}>)
     set_tests_properties(${name}_np${np}_chunk4k PROPERTIES TIMEOUT 120)
+    add_test(NAME ${name}_np${np}_sock
+             COMMAND ${MPIEXEC_EXECUTABLE} --oversubscribe -x HXCCL_BOOTSTRAP=socket
+                     ${MPIEXEC_NUMPROC_FLAG} ${np} $<TARGET_FILE:${name}>)
+    set_tests_properties(${name}_np${np}_sock PROPERTIES TIMEOUT 120)
   endforeach()
 endfunction()
 if(HXCCL_CUDA)
