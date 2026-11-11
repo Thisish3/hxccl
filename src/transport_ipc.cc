@@ -64,6 +64,8 @@ struct IpcTransport::StagedOp {
   uint64_t size_msg = 0;
   int req_size = -1, req_data = -1;
   bool size_done = false, data_done = false;
+  bool data_posted = false;  // a receive posts its data receive once the size is known
+  int peer = -1, tag = 0;
 };
 
 IpcTransport::IpcTransport(Net& net, size_t chunk)
@@ -177,6 +179,9 @@ void IpcTransport::release_ipc() {
 IpcTransport::~IpcTransport() {
   for (int& r : abort_req_)
     if (r >= 0) net_.cancel(r);
+  for (StagedOp& o : retired_)  // a socket Net finishes a started send from its own copy
+    for (int r : {o.req_size, o.req_data})
+      if (r >= 0) net_.cancel(r);
   release_ipc();
 }
 
@@ -248,9 +253,11 @@ hxcclResult_t IpcTransport::staged_post(bool is_send, int peer, char* dev, size_
       ++msgs_sent;
     }
   } else {
+    // the data receive is posted once the size S is in, sized S (Minor 6): a short receive
+    // then fills its first R bytes and reports truncation, like the host path
+    o.peer = peer;
+    o.tag = tag;
     r = ctl(net_.irecv(peer, kDoneBase + tag, &o.size_msg, 8, &o.req_size), "recv size");
-    if (!r) r = ctl(net_.irecv(peer, kDataBase + tag, o.host.data(), bytes, &o.req_data),
-                    "recv data");
   }
   return r ? fail(r) : r;
 }
@@ -260,47 +267,75 @@ hxcclResult_t IpcTransport::staged_post(bool is_send, int peer, char* dev, size_
 // copies) and the ops are dropped. *first collects a truncation error.
 hxcclResult_t IpcTransport::staged_step(bool* done, hxcclResult_t* first) {
   *done = true;
+  reap_retired();
   for (StagedOp& o : staged_ops_) {
     for (auto [req, flag] : {std::pair<int*, bool*>{&o.req_size, &o.size_done},
                              std::pair<int*, bool*>{&o.req_data, &o.data_done}}) {
       if (*flag || *req < 0) continue;
       bool d = false;
       const hxcclResult_t r = net_.test(*req, &d);
-      if (!d) {
-        *done = false;
-        continue;
-      }
+      if (!d) continue;
       *req = -1;
       *flag = true;
       if (r != hxcclSuccess) {
-        if (std::strstr(net_.error.c_str(), "truncated")) {  // like the host path: keep going
-          if (*first == hxcclSuccess) {
-            *first = r;
-            error = "staged device transfer: " + net_.error;
-          }
-        } else {
-          error = "staged device transfer: " + net_.error;
-          return fail(r);
-        }
-      }
-      if (!o.is_send && o.size_done && o.data_done && r == hxcclSuccess) {
-        const size_t len = std::min<size_t>(o.size_msg, o.bytes);
-        if (len) {
-          HX_RANGE_PUSH("staged:h2d");
-          const hxcclResult_t c = cuda(
-              cudaMemcpyAsync(o.dev, o.host.data(), len, cudaMemcpyHostToDevice, stream_),
-              "cudaMemcpyAsync host to device");
-          HX_RANGE_POP();
-          if (c) return fail(c);
-        }
+        error = "staged device transfer: " + net_.error;
+        return fail(r);
       }
     }
+    if (!o.is_send && o.size_done && !o.data_posted) {  // the size is in: receive S bytes
+      const uint64_t s = o.size_msg;
+      if (s > (uint64_t(1) << 40)) {
+        error = "staged device transfer: impossible message size from rank " +
+                std::to_string(o.peer);
+        return fail(hxcclSystemError);
+      }
+      o.host.resize(s);
+      o.data_posted = true;
+      if (hxcclResult_t r = ctl(net_.irecv(o.peer, kDataBase + o.tag, o.host.data(), s,
+                                           &o.req_data), "recv data"))
+        return fail(r);
+      *done = false;  // the data is still to come
+      continue;
+    }
+    if (!o.is_send && o.data_done && o.data_posted && o.dev) {
+      const size_t len = std::min<size_t>(o.size_msg, o.bytes);
+      if (len) {
+        HX_RANGE_PUSH("staged:h2d");
+        const hxcclResult_t c = cuda(
+            cudaMemcpyAsync(o.dev, o.host.data(), len, cudaMemcpyHostToDevice, stream_),
+            "cudaMemcpyAsync host to device");
+        HX_RANGE_POP();
+        if (c) return fail(c);
+      }
+      if (o.size_msg > o.bytes && *first == hxcclSuccess) {
+        *first = hxcclSystemError;
+        error = "message truncated: the receive buffer is smaller than the message";
+      }
+      o.dev = nullptr;  // copied
+    }
+    const bool finished = o.is_send ? (o.size_done && o.data_done)
+                                    : (o.size_done && o.data_posted && o.data_done);
+    if (!finished) *done = false;
   }
   if (!*done) return hxcclSuccess;
   if (hxcclResult_t r = cuda(cudaStreamSynchronize(stream_), "cudaStreamSynchronize"))
     return fail(r);
   staged_ops_.clear();
   return hxcclSuccess;
+}
+
+// E-I1: a staged send still in the Net reads its host copy; keep that alive until it is done.
+void IpcTransport::reap_retired() {
+  for (auto it = retired_.begin(); it != retired_.end();) {
+    for (int* req : {&it->req_size, &it->req_data})
+      if (*req >= 0) {
+        bool d = false;
+        net_.test(*req, &d);
+        if (d) *req = -1;
+      }
+    if (it->req_size < 0 && it->req_data < 0) it = retired_.erase(it);
+    else ++it;
+  }
 }
 
 hxcclResult_t IpcTransport::isend(int to, const void* buf, size_t bytes, int tag) {
@@ -435,6 +470,7 @@ hxcclResult_t IpcTransport::step(bool* done) {
     *done = true;
     return r;
   }
+  reap_retired();
   bool any = false;
   if (!sends_[rank_].empty() || !recvs_[rank_].empty()) {
     any = true;  // an unmatched self op waits forever, as MPI would
@@ -510,11 +546,21 @@ void IpcTransport::cancel_all() {
         if (o.req >= 0) net_.cancel(o.req);
       q.clear();
     }
-  for (StagedOp& o : staged_ops_) {
-    if (o.req_size >= 0) net_.cancel(o.req_size);
-    if (o.req_data >= 0) net_.cancel(o.req_data);
+  for (auto it = staged_ops_.begin(); it != staged_ops_.end();) {
+    if (!it->is_send) {
+      if (it->req_size >= 0) net_.cancel(it->req_size);
+      if (it->req_data >= 0) net_.cancel(it->req_data);
+      ++it;
+    } else if (it->req_size >= 0 || it->req_data >= 0) {
+      // the Net may still read this op's host copy: keep it until the sends finish (E-I1)
+      auto next = std::next(it);
+      retired_.splice(retired_.end(), staged_ops_, it);
+      it = next;
+    } else {
+      ++it;
+    }
   }
-  cudaStreamSynchronize(stream_);  // nothing may still read a staged host buffer
+  cudaStreamSynchronize(stream_);  // no device copy may still use a staged host buffer
   staged_ops_.clear();
   pending_rc_ = hxcclSuccess;
   trunc_msg_.clear();

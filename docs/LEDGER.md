@@ -121,3 +121,29 @@
   - staged 경로(= torchrun의 device 경로): 256 MiB에서 IPC보다 10.8~12.6배, gloo보다 4.1배 느리다(KNOWN_ISSUES #33).
   - PyTorch mpirun: np2 256 MiB 41.8 ms로 C 측정(41.5 ms)과 같다. torchrun은 559 ms.
   - 바닥값(np2 약 3.2 ms)이 IPC copy가 없는 staged 경로에도 똑같이 있다. 그러니 IPC copy 자체가 원인은 아니다. **원인 미확인**(#35).
+
+### 맥 E 리뷰(`docs/desktop/e-review-fixes.md`) 반영
+
+- **R40** E-I1. 취소된 send가 해제된 메모리를 계속 읽던 문제.
+  - 재현: `tests/test_net_cancel.cc`(CPU 빌드, 소켓 통신기). rank 0이 32 MiB send를 걸고 취소한 뒤 버퍼를 덮어쓰자, rank 1이 받은 8,388,608 word 중 7,732,214개가 원래 값과 달랐다.
+  - 수정(`SockMesh::cancel`): 아직 한 바이트도 안 나간 send는 큐에서 뺀다. 일부가 나간 send는 본문을 내부 버퍼(`SendOp::own`)로 복사해 끝까지 보낸다. 프레임을 중간에 끊으면 스트림이 어긋나기 때문이다.
+  - 수정(staged 경로): `cancel_all`이 아직 Net에 걸린 send를 `retired_` 목록으로 옮겨, 그 host 복사본을 send가 끝날 때까지 살려 둔다. 매 step에서 정리하고, 소멸자에서는 취소한다.
+  - 수정 결과: 테스트 통과(np2·np4 소켓).
+  - 미룸: MPI 통신기는 사용자 버퍼를 지킬 수 없다 → KNOWN_ISSUES #36. 리뷰가 말한 staged 3-rank 시나리오 자체는 따로 재현 테스트를 만들지 않았다. 같은 Net 취소 경로를 위 테스트로 확인했다.
+- **R41** E-I2. Group 안의 truncation이 다른 통신기를 취소하던 문제.
+  - 재현: `tests/repro_group_truncation.cc`(np2, 통신기 둘, 3회). 소켓 제어에서는 2회차의 c2 데이터와 그 다음 c2 전송이 모두 틀렸다(메시지가 하나씩 어긋남). MPI 제어에서는 **재현 안 됨**(통과).
+  - 수정: `run_p2p`가 한 transport의 오류에 다른 transport를 취소하지 않고 끝까지 진행시킨다. 치명적인 device 오류는 이미 I5의 ABORT로 그 통신기의 상대에게 알려진다.
+  - 결과: MPI·소켓 모두 통과.
+- **R42** E-I3. 지금 동작을 측정했다: `repro_p2p_first_partial` np4에서 rank 3이 컨텍스트 없이 통신기를 만들면 60 s timeout으로 멈춘다(`REPRO_NO_CONTEXT_RANK=3`). 고치지 않고 KNOWN_ISSUES #37과 README에 제약과 우회법(`HXCCL_DEVICE=1` 또는 미리 컨텍스트 만들기)을 적었다. 이 변형은 멈추는 테스트라 ctest에 등록하지 않았다.
+- **R43** Minor:
+  - 1(root listen 실패 시 다른 rank 멈춤): id listener를 먼저 꺼내고, 실패하면 닫는다. 고침.
+  - 2(`Info`에 nonce 없음): 넣고 root가 검사한다. 고침.
+  - 3(취소된 수신 처리 불일치): 진행 중인 unexpected 메시지를 claim한 수신이 취소되면 그 메시지를 버리게 했다(posted 수신 취소와 같게). 고침.
+  - 4(`hdr.bytes` 무검사): 1 TiB 초과나 할당 실패는 그 상대를 실패 처리하고 예외를 밖으로 내지 않는다. 고침.
+  - 5(lock 없음): KNOWN_ISSUES #38과 README에 기록.
+  - 6(staged truncation 문자열 판정): 크기 메시지를 먼저 받고 데이터는 그 크기로 받게 바꿨다. 앞 R바이트를 device에 쓰고 truncation을 보고해 host 경로와 같다. 고침.
+  - 7(자식이 남은 부모의 Abort): KNOWN_ISSUES #39에 기록.
+- **R44** 고치다 생긴 회귀 하나를 잡았다. Minor 6 변경 직후, staged 수신이 크기만 받고 데이터가 오기 전에 끝난 것으로 처리돼 **성공을 반환하면서 값이 틀렸다**. `repro_init_failure_inject`와 staged 변형이 잡았다. 고친 뒤 staged 변형 36/36 통과.
+- **R45** 결과와 확인 못 한 것:
+  - 결과: CPU 168/168(`test_net_cancel` 추가), CUDA 272/272, PyTorch torchrun·mpirun np2·np4 각각 37 passed, 3 skipped.
+  - **측정 안 함:** 리뷰어가 물은 `cuInit`/`cuDevicePrimaryCtxGetState` 호출 비용(통신기 생성 때 한 번 부른다). 읽지 않은 데이터가 남은 채 close할 때 TCP RST로 상대 데이터가 버려지는지.

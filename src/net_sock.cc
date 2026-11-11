@@ -17,11 +17,13 @@
 #include <map>
 #include <mutex>
 #include <random>
+#include <stdexcept>
 #include <thread>
 
 namespace {
 
-constexpr int kAllgatherTag = -1;  // internal; library and user tags are >= 0
+constexpr int kAllgatherTag = -1;
+constexpr uint64_t kMaxMessage = uint64_t(1) << 40;  // larger sizes mean a corrupt header  // internal; library and user tags are >= 0
 constexpr uint32_t kIdMagic = 0x48585342;  // "HXSB"
 const char* const kTruncated = "message truncated: the receive buffer is smaller than the message";
 
@@ -91,7 +93,7 @@ hxcclResult_t SockMesh::isend(int peer, uint64_t comm, int tag, const void* buf,
     finish(*req, hxcclSystemError, "rank " + std::to_string(peer) + " closed the connection");
     return hxcclSuccess;
   }
-  SendOp op{*req, Header{comm, tag, 0, bytes}, src};
+  SendOp op{*req, Header{comm, tag, 0, bytes}, src, 0, {}};
   p.sendq.push_back(op);
   if (p.sendq.size() == 1) write_some(peer);  // usually goes out right away
   return hxcclSuccess;
@@ -101,7 +103,7 @@ hxcclResult_t SockMesh::irecv(int peer, uint64_t comm, int tag, void* buf, size_
   *req = new_req();
   Peer& p = peers_[peer];
   for (auto it = p.unexpected.begin(); it != p.unexpected.end(); ++it) {
-    if (it->comm != comm || it->tag != tag || it->claim >= 0) continue;
+    if (it->comm != comm || it->tag != tag || it->claim >= 0 || it->drop) continue;
     if (!it->complete) {  // still arriving: take it when the body is in
       it->claim = *req;
       it->claim_buf = static_cast<char*>(buf);
@@ -137,10 +139,27 @@ void SockMesh::cancel(int req) {
   for (Peer& p : peers_) {
     p.posted.remove_if([&](const RecvOp& r) { return r.req == req; });
     if (p.dest_req == req) p.dest_cancelled = true;
-    for (Unexpected& u : p.unexpected)
-      if (u.claim == req) u.claim = -1;
-    for (SendOp& s : p.sendq)  // a send in flight finishes in the background
-      if (s.req == req) s.req = -1;
+    for (Unexpected& u : p.unexpected)  // like a posted receive cancelled mid-body:
+      if (u.claim == req) u.claim = -1, u.drop = true;  // the message is discarded
+    // E-I1: after cancel the caller may free or reuse its buffer. A send that has not
+    // started leaves the queue; one already partly on the wire must still complete (cutting
+    // a frame would break the stream), so it continues from a private copy.
+    for (auto it = p.sendq.begin(); it != p.sendq.end();) {
+      if (it->req != req) {
+        ++it;
+        continue;
+      }
+      if (it->off == 0) {
+        it = p.sendq.erase(it);
+        continue;
+      }
+      if (it->own.empty() && it->h.bytes) {
+        it->own.assign(it->buf, it->buf + it->h.bytes);
+        it->buf = it->own.data();
+      }
+      it->req = -1;
+      ++it;
+    }
   }
   if (reqs_[req].used) {
     reqs_[req].used = false;
@@ -223,7 +242,13 @@ void SockMesh::begin_body(Peer& p) {
   Unexpected u;
   u.comm = p.hdr.comm;
   u.tag = p.hdr.tag;
-  u.data.resize(p.hdr.bytes);
+  try {  // a size from the peer: never let a corrupt header throw out of the C API (Minor 4)
+    if (p.hdr.bytes > kMaxMessage) throw std::length_error("message size");
+    u.data.resize(p.hdr.bytes);
+  } catch (const std::exception&) {
+    corrupt_ = true;
+    return;
+  }
   p.unexpected.push_back(std::move(u));
   p.dest_unexp = &p.unexpected.back();
 }
@@ -233,7 +258,9 @@ void SockMesh::deliver(Peer& p) {
   if (p.dest_unexp) {
     Unexpected* u = p.dest_unexp;
     u->complete = true;
-    if (u->claim >= 0) {
+    if (u->drop) {
+      p.unexpected.remove_if([u](const Unexpected& x) { return &x == u; });
+    } else if (u->claim >= 0) {
       if (n) std::memcpy(u->claim_buf, u->data.data(), std::min(n, u->claim_cap));
       finish(u->claim, n > u->claim_cap ? hxcclSystemError : hxcclSuccess,
              n > u->claim_cap ? kTruncated : "");
@@ -282,6 +309,11 @@ bool SockMesh::read_some(int peer) {
       p.hdr_got += static_cast<size_t>(n);
       if (p.hdr_got < sizeof(Header)) continue;
       begin_body(p);
+      if (corrupt_) {
+        corrupt_ = false;
+        fail_peer(peer, "corrupt message header from rank " + std::to_string(peer));
+        return false;
+      }
       if (p.hdr.bytes == 0) deliver(p);
       continue;
     }
@@ -381,6 +413,7 @@ struct Info {  // what each rank tells the root
   uint32_t addr;
   uint16_t port;
   uint16_t pad;
+  uint64_t nonce;  // the id's nonce: a rank holding another (old) id is rejected (Minor 2)
 };
 
 std::mutex g_mu;
@@ -528,10 +561,8 @@ hxcclResult_t sock_init_rank(const hxcclUniqueId& id, int nranks, int rank,
     *err = "not a unique id from hxcclGetUniqueId";
     return hxcclInvalidArgument;
   }
-  int lfd;  // this rank's mesh listener
-  Info me{rank, nranks, local_addr(), 0, 0};
-  if (hxcclResult_t r = listen_on(me.addr, &lfd, &me.port, err)) return r;
-
+  // take the id's listener first: if this rank is the root and fails below, closing it
+  // makes the other ranks' bootstrap fail instead of waiting forever (Minor 1)
   int root_fd = -1;
   {
     std::lock_guard<std::mutex> lock(g_mu);
@@ -540,6 +571,12 @@ hxcclResult_t sock_init_rank(const hxcclUniqueId& id, int nranks, int rank,
       root_fd = it->second;
       listeners().erase(it);
     }
+  }
+  int lfd;  // this rank's mesh listener
+  Info me{rank, nranks, local_addr(), 0, 0, d.nonce};
+  if (hxcclResult_t r = listen_on(me.addr, &lfd, &me.port, err)) {
+    if (root_fd >= 0) close(root_fd);
+    return r;
   }
   std::vector<Info> table(nranks);
   int32_t status = 0;
@@ -557,7 +594,9 @@ hxcclResult_t sock_init_rank(const hxcclUniqueId& id, int nranks, int rank,
     close(root_fd);
     std::vector<bool> seen(nranks, false);
     for (const Info& i : got) {
-      if (i.nranks != nranks || i.rank < 0 || i.rank >= nranks || seen[i.rank]) status = 1;
+      if (i.nranks != nranks || i.rank < 0 || i.rank >= nranks || seen[i.rank] ||
+          i.nonce != d.nonce)
+        status = 1;
       else seen[i.rank] = true;
     }
     if (!io_ok) status = 2;

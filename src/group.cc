@@ -64,12 +64,11 @@ hxcclResult_t run_p2p(const std::vector<P2p>& ops) {
       fin[i] = true;
       --left;
       if (r == hxcclSuccess) r = sync_ops(*used[i].second);
-      if (r != hxcclSuccess && first == hxcclSuccess) {
+      // E-I2: keep driving the others to the end. Cancelling them left a peer's message
+      // unmatched (later receives got the wrong one) or a peer waiting forever. A fatal device
+      // error has already sent ABORT to that communicator's peers (I5).
+      if (r != hxcclSuccess && first == hxcclSuccess)
         first = ops_fail(used[i].first, *used[i].second, r);
-        // the others may wait for a peer that now fails: stop them too
-        for (size_t j = 0; j < used.size(); ++j)
-          if (!fin[j]) used[j].second->tr().cancel_all(), fin[j] = true, --left;
-      }
     }
   }
   HX_RANGE_POP();

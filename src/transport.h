@@ -132,6 +132,8 @@ class IpcTransport : public Transport {
   bool staged_ = false;
   std::string staged_reason_;
   std::list<StagedOp> staged_ops_;  // list: the Net holds pointers into each op
+  std::list<StagedOp> retired_;     // cancelled sends the Net may still be reading (E-I1)
+  void reap_retired();
   hxcclResult_t broken_ = hxcclSuccess;
   std::string broken_msg_;
   hxcclResult_t pending_rc_ = hxcclSuccess;  // a truncation, reported when all is done

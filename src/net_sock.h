@@ -44,6 +44,7 @@ class SockMesh {
     Header h;
     const char* buf;
     size_t off = 0;  // bytes of header + body written so far
+    std::vector<char> own;  // set when cancelled mid-message: buf then points here (E-I1)
   };
   struct RecvOp {
     int req;
@@ -58,6 +59,7 @@ class SockMesh {
     std::vector<char> data;
     bool complete = false;
     int claim = -1;  // a receive posted while the body was still arriving
+    bool drop = false;  // its receive was cancelled: discard it when complete (Minor 3)
     char* claim_buf = nullptr;
     size_t claim_cap = 0;
   };
@@ -92,7 +94,8 @@ class SockMesh {
   std::vector<Peer> peers_;
   std::vector<Req> reqs_;
   std::vector<int> free_;
-  std::vector<char> scratch_;  // discarded bytes of truncated messages
+  std::vector<char> scratch_;
+  bool corrupt_ = false;  // set by begin_body on an impossible message size  // discarded bytes of truncated messages
 };
 
 class SockNet : public Net {

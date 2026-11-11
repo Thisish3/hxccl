@@ -212,6 +212,8 @@ Usage limits (B):
 - Build with `-DHXCCL_CUDA=ON`. A call returns only after its device work finishes; it does not return early the way NCCL does.
 - All ranks must pass the same kind of buffer (host or device) to a collective. The first device call starts the device path with a collective step.
 - A group cannot mix host and device Send/Recv; GroupEnd returns `hxcclInvalidUsage`.
+- **C API and device Send/Recv:** create a CUDA context on every rank before creating the communicator, or set `HXCCL_DEVICE=1`. Otherwise a first device Send/Recv that only some ranks make hangs (KNOWN_ISSUES #37).
+- **Threads:** communicators created from one another (Split/Shrink) on socket communicators share sockets, so use them from one thread (KNOWN_ISSUES #38).
 
 ## PyTorch backend (C)
 

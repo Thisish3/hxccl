@@ -130,6 +130,7 @@ if(HXCCL_CUDA)
   hxccl_repro_test(repro_two_comm_group 2 "")
   hxccl_repro_test(repro_device_scalar 2 "")
   hxccl_repro_test(repro_peer_failure 2 "HXCCL_TEST_FAIL_DEVICE_COPY=1")
+  hxccl_repro_test(repro_group_truncation 2 "")
 endif()
 
 if(HXCCL_CUDA)
