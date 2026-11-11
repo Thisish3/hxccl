@@ -32,7 +32,6 @@ Open problems, deferred review findings and unexplained observations. Update thi
 | 21 | The device path has a floor of about 3.1–3.6 ms per AllReduce at np2 (README, B). Measured parts: `cudaMallocAsync` on every call (median 0.31–0.37 ms), and one `cudaStreamSynchronize` per chunk copy (median 0.13–0.15 ms). The rest is mostly MPI READY/DONE waits, which were not traced. Why the pool does not reuse memory and why one synchronize costs that much on WSL2 is not confirmed. | `src/memops_device.cc`, `src/transport_ipc.cc` |
 | 22 | `IpcTransport` moves one chunk per round trip, with one staging buffer per peer pair. Chunks are not pipelined, and no CUDA IPC events are used. | `src/transport_ipc.cc` |
 | 23 | `hxccl_perf -d` leaves the MPI column empty. Whether apt's OpenMPI 4.1.2 is CUDA-aware was not checked. | `bench/hxccl_perf.cc` |
-| 26 | In a `HXCCL_CUDA=ON` build, host-only programs also create a CUDA context, because every call classifies its pointers with `cudaPointerGetAttributes`. Measured on 2026-11-11: GPU memory went from 503 MiB to 963 MiB during `hxccl_perf` np4 on host buffers (about 115 MiB per rank). With the CPU build it stayed at 503 MiB. | `src/memspace_cuda.cc` |
 | 27 | `IpcTransport::waitall` polls `MPI_Test` in a loop without sleeping, so a waiting rank keeps a CPU core busy. CPU use was not measured. | `src/transport_ipc.cc` |
 
 ### Tests
@@ -62,3 +61,4 @@ Open problems, deferred review findings and unexplained observations. Update thi
 | The return code of the AllToAllv agreement `MPI_Allreduce` was ignored | 4deac21 |
 | `cancel_all` used `MPI_Cancel` on send requests, which MPI-4 deprecates | 4deac21 |
 | The fp8 comment said "via half" while the code computes in float (its later "both exact" justification was also wrong; an exhaustive check now backs the claim); spec 6 promised InvalidUsage after Abort although Abort frees the handle | 4deac21 |
+| #26: the extra GPU memory (about 115 MiB per rank) in host-only runs of the `HXCCL_CUDA` build came from `hxccl_perf` calling `cudaSetDevice(0)` unconditionally, not from the library as first written. Measured: `cudaPointerGetAttributes` on a host pointer leaves the primary context inactive (CUDA 12.2), and with `hxccl_perf` fixed, host np4 runs stay at idle GPU memory (441 MiB) with the library before and after. The new test `gpu_host_no_context` checks that host-only calls create no context. | this commit |

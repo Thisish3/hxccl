@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 #else
-  cudaSetDevice(0);
+  if (device) cudaSetDevice(0);  // host runs must not create a CUDA context
 #endif
   const char* mem = device ? "device" : "host";
   hxcclComm_t c;

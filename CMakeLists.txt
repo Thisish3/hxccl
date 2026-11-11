@@ -63,7 +63,7 @@ endforeach()
 function(hxccl_gpu_test name)
   add_executable(${name} tests/${name}.cc)
   target_include_directories(${name} PRIVATE src tests)
-  target_link_libraries(${name} PRIVATE hxccl)
+  target_link_libraries(${name} PRIVATE hxccl CUDA::cuda_driver)  # gpu_host_no_context probes contexts
   foreach(np 1 2 4)
     add_test(NAME ${name}_np${np}
              COMMAND ${MPIEXEC_EXECUTABLE} --oversubscribe ${MPIEXEC_NUMPROC_FLAG} ${np}

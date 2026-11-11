@@ -37,3 +37,9 @@
   (4) 비동기 반환, Group 혼합 거절, torchrun 미지원, 항상 완료된 Work를 KNOWN_ISSUES #16·#17·#19·#20에 추가하고, #4(fp8)는 Task 3 결과로 갱신돼 있다.
   (5) 맥 CPU 빌드(`HXCCL_CUDA=OFF`, clang/libc++)는 이 데스크탑에서 확인할 수 없다. `fp.h`·`elem.h`가 `<math.h>`의 `isnan`/`ldexpf` 등을 한정자 없이 쓰므로 맥에서 빌드와 78개 테스트 확인이 필요하다(스펙 5 "CPU 빌드" 행).
   그 밖의 코드 결함은 찾지 못했다.
+- **R29** (#26 수정, R28 (1) 정정) R28 (1)의 원인 판단이 틀렸다. 확인한 것:
+  - 시험 프로그램에서 host 포인터로 `cudaPointerGetAttributes`를 불러도 primary 컨텍스트는 비활성(active=0) 그대로였다. `cudaSetDevice(0)` 뒤에는 active=1이 됐다.
+  - 115 MiB/rank는 `hxccl_perf`가 CUDA 빌드에서 `cudaSetDevice(0)`를 무조건 부른 탓이었다. `-d`일 때만 부르게 고치자, 수정 전 라이브러리와 driver API로 먼저 확인하게 바꾼 라이브러리 모두 host np4 실행 중 GPU 메모리가 441 MiB(idle과 같음)였다.
+  - 그래서 라이브러리 변경(driver API 확인, libcuda 링크)은 되돌렸다. 회귀 테스트 `tests/gpu_host_no_context.cc`를 추가했고, 이 테스트만 `CUDA::cuda_driver`를 링크한다. host 구간에 `cudaFree(0)`를 넣으면 이 테스트가 실패하는 것도 확인했다.
+  - 결과: CUDA 빌드 108/108, CPU 빌드 78/78.
+  - 측정 영향: B·Task 6의 host 경로 측정은 rank마다 CUDA 컨텍스트가 있는 상태에서 잰 것이다. 시간에 영향이 있었는지는 확인하지 않았다.
