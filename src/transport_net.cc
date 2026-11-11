@@ -73,3 +73,30 @@ void NetTransport::cancel_all() {
   for (int req : pending_) net_->cancel(req);
   pending_.clear();
 }
+
+hxcclResult_t NetTransport::step(bool* done) {
+  hxcclResult_t first = hxcclSuccess;
+  std::string msg;
+  std::vector<int> left;
+  for (int req : pending_) {
+    bool d = false;
+    const hxcclResult_t r = net_->test(req, &d);
+    if (!d) {
+      left.push_back(req);
+      continue;
+    }
+    if (r != hxcclSuccess && first == hxcclSuccess) {
+      first = r;
+      msg = net_->error;
+    }
+  }
+  pending_ = std::move(left);
+  if (first != hxcclSuccess) {  // finish what is left, then report the first failure
+    waitall();
+    error = msg;
+    *done = true;
+    return first;
+  }
+  *done = pending_.empty();
+  return hxcclSuccess;
+}

@@ -33,6 +33,11 @@ Open problems, deferred review findings and unexplained observations. Update thi
 | 22 | `IpcTransport` moves one chunk per round trip, with one staging buffer per peer pair. Chunks are not pipelined, and no CUDA IPC events are used. | `src/transport_ipc.cc` |
 | 23 | `hxccl_perf -d` leaves the MPI column empty. Whether apt's OpenMPI 4.1.2 is CUDA-aware was not checked. | `bench/hxccl_perf.cc` |
 | 27 | `IpcTransport::waitall` polls `MPI_Test` in a loop without sleeping, so a waiting rank keeps a CPU core busy. CPU use was not measured. | `src/transport_ipc.cc` |
+| 28 | `hxcclCommAbort` called from another thread while a device call is polling (`IpcTransport::step`) can free the queues being walked (use-after-free). | `src/transport_ipc.cc` |
+| 29 | The device-transfer polling loop has no time limit: a peer that dies without sending ABORT (killed process) leaves the others polling. | `src/transport_ipc.cc` |
+| 30 | M1: the PyTorch backend uses the current device's stream, not the tensor's device, and sets no `CUDAGuard`. Not reproducible with one GPU. | `python/hxccl_torch/csrc/backend.cpp` |
+| 31 | M2: the PyTorch `send`/`recv` ignore `tag` and use `ts[0]` without checking the list size. | `python/hxccl_torch/csrc/backend.cpp` |
+| 32 | M4: device collectives still apply the MPI per-message `INT_MAX` limit (`check_message`), although the IPC path sends chunks. | `src/checks.cc` |
 
 ### Tests
 

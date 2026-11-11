@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "memspace.h"
 #include "reduce.h"
 
 hxcclResult_t check_args(hxcclComm* c, const void* send, const void* recv, size_t count,
@@ -25,7 +26,8 @@ hxcclResult_t check_message(hxcclComm* c, size_t largest_bytes) {
                    "a single message would exceed INT_MAX bytes (MPI transport limit)");
 }
 
-hxcclResult_t plan_op(hxcclComm* c, hxcclRedOp_t op, hxcclDataType_t dt, OpPlan* p) {
+hxcclResult_t plan_op(hxcclComm* c, hxcclRedOp_t op, hxcclDataType_t dt, OpPlan* p,
+                      hxcclStream_t stream) {
   *p = OpPlan{};
   if (valid_op(op)) {
     p->base = op;
@@ -47,7 +49,15 @@ hxcclResult_t plan_op(hxcclComm* c, hxcclRedOp_t op, hxcclDataType_t dt, OpPlan*
   if (u.dt != dt)
     return comm_fail(c, hxcclInvalidArgument, "PreMulSum op was created for another datatype");
   p->premul = true;
-  std::memcpy(p->scalar, u.by_ptr ? u.ptr : u.value, dtype_size(dt));
+  if (!u.by_ptr) {
+    std::memcpy(p->scalar, u.value, dtype_size(dt));
+    return hxcclSuccess;
+  }
+  // hxcclScalarDevice: the pointer may be device memory (I3); read it now, after the work
+  // already queued on the caller's stream
+  std::string err;
+  if (hxcclResult_t r = read_scalar(p->scalar, u.ptr, dtype_size(dt), stream, &err))
+    return comm_fail(c, r, "reading the PreMulSum scalar: " + err);
   return hxcclSuccess;
 }
 

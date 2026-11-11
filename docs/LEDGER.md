@@ -51,3 +51,37 @@
   - `test_errors`의 "모두가 rank 0이라고 주장" 기대값: rank 0만 성공 → 모든 rank가 `hxcclInvalidUsage`(겹친 rank로는 메시를 만들 수 없다).
   - `MPI_Comm_get_errhandler(c->mpi)` 검사: MPI 통신기일 때만 한다(소켓 통신기에는 MPI 핸들이 없다).
 - **E3** (Task E1) 결과: CPU 빌드 156/156(MPI 78 + `HXCCL_BOOTSTRAP=socket` 78). 소켓 변형만 따로 3번 더 돌려 매번 78/78. CUDA 빌드 201/201(GPU 테스트의 소켓 변형 포함). 상대가 연결을 닫으면 그 상대가 걸린 요청만 실패시키고, 부트스트랩 connect는 30초 동안 재시도한다. 부트스트랩 timeout(오지 않는 rank 감지)은 넣지 않았다(스펙 2).
+- **E4** (Task E2) torchrun에서 GPU 텐서가 `cudaIpcOpenMemHandle: invalid resource handle`로 실패했다.
+  - 원인(측정): 이 WSL은 `ptrace_scope=1`이다. 핸들을 내보낸 프로세스가 ptrace를 허용해야(`prctl(PR_SET_PTRACER, ANY)`) 상대가 핸들을 연다. OpenMPI의 `MPI_Init`이 이 설정을 해 주고 있었다. ctypes로 `prctl`만 불러도 torchrun에서 성공했고, `MPI_Init` 뒤 설정을 0으로 되돌리면 C++에서도 같은 오류가 났다(`tests/gpu_no_ptracer.cc`). CUDA가 왜 ptrace 권한을 요구하는지는 **원인 미확인**.
+  - 라이브러리에서 `prctl`을 부르는 수정은 자동 모드 권한 분류기가 "보안 약화"로 거부했다. 대신 IPC를 열 수 없으면 모든 rank가 합의해 **staged 경로**(device → host → Net → host → device)로 자동 전환하게 했다. `HXCCL_DEVICE_TRANSPORT=staged`로 강제할 수도 있다.
+  - CUDA VMM의 POSIX fd 공유도 시험했다: API는 성공했지만 읽은 값이 틀렸다(1M 중 524288개). 그래서 쓰지 않았다. **원인 미확인.**
+  - 중간 버전(검증 전 staged 코드)의 `gpu_no_ptracer` 실행이 끝나지 않았고, 그 뒤 GPU가 멈춰 `wsl --shutdown`이 필요했다. **원인 미확인.** 지금 코드에서는 np2·np4 모두 staged로 합의하고 정상 종료한다.
+- **E5** (Task E2) PyTorch 확장이 import 때 `MPI_Init`을 부르지 않는다. 결과: torchrun np2·np4, mpirun np2·np4 모두 37 passed, 3 skipped.
+
+### 맥 최종 리뷰(`docs/desktop/b-review-fixes.md`) 반영, `e-socket`에서
+
+- **R30** 재현(커밋된 E1 코드 `53fb9fe`, 테스트를 하나씩 따로, 각 TIMEOUT 60 s):
+  - I3: segfault
+  - I1, I4, I2: Timeout
+  - I5: Timeout. 실패 주입한 rank 0은 반환하고 rank 1은 대기
+  - 처음 동시 실행은 앞선 중단 실행 때문에 GPU가 이미 멈춘 상태여서 무효로 보고 다시 쟀다.
+  - 테스트: `tests/repro_*.cc`, MPI·소켓 변형, I2는 실패 주입 변형(`_inject`)까지 12개.
+- **R31** I4: 통신기 생성 때(`device_eager_init`, 모든 rank가 부르는 집합 동작) 모든 rank에 CUDA 컨텍스트가 이미 있으면 device 경로를 바로 시작한다. 컨텍스트 확인은 driver API로 해서 새로 만들지 않는다(그래서 `CUDA::cuda_driver`를 링크). 컨텍스트가 없는 host 전용 프로그램은 #26 보장 그대로 지연 시작한다(`gpu_host_no_context` 통과). `HXCCL_DEVICE=1`은 강제 시작, `HXCCL_DEVICE=0`은 끈다. PyTorch 백엔드는 통신기를 만들기 전에 `cudaFree(nullptr)`로 컨텍스트를 만든다.
+- **R32** I2:
+  - `HXCCL_IPC_CHUNK`는 64 B~1 GiB인 숫자만 받고, 그 밖의 값은 기본 4 MiB로 둔다. 그 뒤 모든 rank의 최솟값으로 합의한다.
+  - `IpcTransport::init`의 모든 단계(할당, 핸들 교환, 열기)를 실패와 상관없이 모든 rank가 거치고, 매 단계 합의한다. 어디서든 실패하면 모두 staged로 간다. 상대 핸들을 모두 닫은 뒤 합의를 한 번 더 하고 나서 자기 버퍼를 해제한다.
+  - Net 자체가 실패하면 통신기에 오류를 고정한다(`dev_error`). 이후 device 호출은 다시 시도하지 않고 그 오류를 반환한다.
+- **R33** I1: `Transport::step()`(한 번만 진행, 블록하지 않음)을 추가했다. `run_p2p`는 Group이 쓰는 모든 transport를 한 루프에서 번갈아 진행한다. 하나가 실패하면 나머지는 취소한다. MPI transport는 기본 구현(waitall)을 쓴다: MPI가 프로세스의 모든 요청을 함께 진행시키기 때문이다.
+- **R34** I3: `plan_op`가 stream을 받는다. `hxcclScalarDevice` 포인터가 device 메모리면 그 stream을 동기화한 뒤 `cudaMemcpy`로 읽는다(`read_scalar`). 호출 시점의 값을 쓴다.
+- **R35** I5:
+  - 각 rank가 device 경로 시작 때 모든 상대로부터 오는 ABORT 수신을 걸어 둔다. 전송 중 치명적 오류가 나면 모든 상대에게 ABORT를 보낸다. 기다리던 rank는 `hxcclRemoteError`("rank N failed during a device transfer")로 반환하고, 그 통신기의 device 경로는 계속 실패 상태로 남는다.
+  - 고치는 중에 오탐을 하나 찾았다. 상대가 통신기를 Destroy해 소켓을 닫으면 ABORT 수신이 "연결 닫힘"으로 완료돼 abort로 잘못 처리됐다(`repro_p2p_first_partial` 소켓 변형). 실제 메시지가 도착했을 때만 abort로 보게 고쳤다.
+  - 미룸: 다른 스레드의 `hxcclCommAbort`와 진행 루프의 동시 실행(use-after-free 가능), poll 루프의 시간 제한 → KNOWN_ISSUES #28, #29.
+- **R36** Minor:
+  - M3는 고쳤다. 자기 자신에게 보낸 메시지가 잘리면 나머지를 취소하지 않고 끝까지 진행한 뒤 truncation을 보고한다.
+  - M1, M2, M4는 KNOWN_ISSUES #30~#32에 기록만 했다.
+  - 리뷰어 질문 두 가지는 확인하지 않았다: Destroy에 barrier 없이 staging 메모리를 `cudaFree`해도 안전한지, 8~16 B 제어 메시지가 항상 eager인지.
+- **R37** 결과:
+  - 재현 테스트 12/12(하나씩), `gpu_no_ptracer` np2·np4 통과(staged로 합의)
+  - CPU 빌드 156/156, CUDA 빌드 258/258(staged·소켓 변형 포함)
+  - PyTorch torchrun·mpirun np2·np4 각각 37 passed, 3 skipped

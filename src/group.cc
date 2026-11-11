@@ -51,11 +51,26 @@ hxcclResult_t run_p2p(const std::vector<P2p>& ops) {
       return comm_fail(o.c, r, tr.error);
     }
   }
+  // Drive every transport in one loop (I1): waiting on one communicator's transport while
+  // a peer waits on another's would deadlock (crossed Send/Recv over two communicators).
   hxcclResult_t first = hxcclSuccess;
-  for (const auto& u : used) {
-    hxcclResult_t r = u.second->tr().waitall();
-    if (r == hxcclSuccess) r = sync_ops(*u.second);
-    if (r != hxcclSuccess && first == hxcclSuccess) first = ops_fail(u.first, *u.second, r);
+  std::vector<bool> fin(used.size(), false);
+  for (size_t left = used.size(); left > 0;) {
+    for (size_t i = 0; i < used.size(); ++i) {
+      if (fin[i]) continue;
+      bool done = false;
+      hxcclResult_t r = used[i].second->tr().step(&done);
+      if (!done) continue;
+      fin[i] = true;
+      --left;
+      if (r == hxcclSuccess) r = sync_ops(*used[i].second);
+      if (r != hxcclSuccess && first == hxcclSuccess) {
+        first = ops_fail(used[i].first, *used[i].second, r);
+        // the others may wait for a peer that now fails: stop them too
+        for (size_t j = 0; j < used.size(); ++j)
+          if (!fin[j]) used[j].second->tr().cancel_all(), fin[j] = true, --left;
+      }
+    }
   }
   HX_RANGE_POP();
   return first;

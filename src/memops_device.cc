@@ -55,3 +55,9 @@ void DeviceOps::release(void* p) { cudaFreeAsync(p, stream_); }
 hxcclResult_t DeviceOps::sync() {
   return cuda(cudaStreamSynchronize(stream_), "cudaStreamSynchronize");
 }
+bool DeviceOps::staged() const { return ipc_->staged(); }
+hxcclResult_t DeviceOps::broken(std::string* why) const {
+  const hxcclResult_t r = ipc_->broken();
+  if (r != hxcclSuccess) *why = ipc_->error;
+  return r;
+}

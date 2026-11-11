@@ -19,7 +19,9 @@ struct OpPlan {
   bool postdiv = false;  // integer Avg: divide the result by `divisor`
   int divisor = 1;
 };
-hxcclResult_t plan_op(hxcclComm* c, hxcclRedOp_t op, hxcclDataType_t dt, OpPlan* p);
+// `stream`: a PreMulSum scalar in device memory (hxcclScalarDevice) is read on it at call time.
+hxcclResult_t plan_op(hxcclComm* c, hxcclRedOp_t op, hxcclDataType_t dt, OpPlan* p,
+                      hxcclStream_t stream);
 // Returns the buffer the algorithm should read: `send`, or `tmp` holding send * scalar.
 // `tmp` must hold count elements when p.premul.
 const void* premul_input(MemOps& m, const OpPlan& p, const void* send, size_t count,

@@ -70,6 +70,9 @@ class HxcclBackend : public Backend {
  public:
   HxcclBackend(const c10::intrusive_ptr<Store>& store, int rank, int size)
       : Backend(rank, size) {
+    // A CUDA context on every rank before the communicator exists lets hxccl start its
+    // device path now (I4), so a first send/recv between two ranks only cannot hang.
+    cudaFree(nullptr);
     hxcclUniqueId id;
     if (rank == 0) {
       ok(hxcclGetUniqueId(&id), nullptr, "GetUniqueId");
@@ -82,9 +85,7 @@ class HxcclBackend : public Backend {
     ok(hxcclCommInitRank(&comm_, size, id, rank), nullptr, "CommInitRank");
   }
   ~HxcclBackend() override {
-    int fin = 0;
-    MPI_Finalized(&fin);
-    if (comm_ && !fin) hxcclCommDestroy(comm_);
+    if (comm_) hxcclCommDestroy(comm_);  // a socket communicator: no MPI involved
   }
   const std::string getBackendName() const override { return "hxccl"; }
 
@@ -158,7 +159,8 @@ c10::intrusive_ptr<Backend> create_backend(const c10::intrusive_ptr<Store>& stor
   return c10::make_intrusive<HxcclBackend>(store, rank, size);
 }
 
-// MPI must be finalized before the process exits under mpirun.
+// If the program itself initialized MPI (for example mpi4py) and has not finalized it, finalize
+// it before exit; with no MPI in use this does nothing.
 void finalize() {
   int init = 0, fin = 0;
   MPI_Initialized(&init);
@@ -167,13 +169,9 @@ void finalize() {
 }
 }  // namespace
 
+// The backend builds its communicator with hxcclGetUniqueId/InitRank over sockets (spec E),
+// so it needs no MPI: it runs under torchrun as well as mpirun.
 PYBIND11_MODULE(_C, m) {
-  int inited = 0;
-  MPI_Initialized(&inited);
-  if (!inited) {
-    int provided;
-    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
-  }
   m.def("create_backend", &create_backend);
   m.def("finalize", &finalize);
 }

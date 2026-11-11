@@ -25,7 +25,7 @@ hxcclResult_t hxcclReduce(const void* send, void* recv, size_t count, hxcclDataT
   if (hxcclResult_t r = check_args(c, send, c->rank == root ? recv : send, count, 1, dt))
     return r;
   OpPlan p;
-  if (hxcclResult_t r = plan_op(c, op, dt, &p)) return r;
+  if (hxcclResult_t r = plan_op(c, op, dt, &p, stream)) return r;
   const size_t bytes = count * dtype_size(dt);
   if (hxcclResult_t r = check_message(c, bytes < kChainMinBytes ? bytes : kChainSegment))
     return r;

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <vector>
 
+#include "memspace.h"
 #include "net_sock.h"
 
 namespace {
@@ -27,6 +28,7 @@ hxcclResult_t make_comm(hxcclComm_t* out, MPI_Comm owned) {
   c->net = std::make_shared<MpiNet>(owned);
   c->host_ops = std::make_unique<HostOps>(c->tr);
   set_op_tag(c);
+  device_eager_init(c);
   *out = c;
   return hxcclSuccess;
 }
@@ -40,6 +42,7 @@ hxcclResult_t make_sock_comm(hxcclComm_t* out, std::shared_ptr<SockNet> net) {
   c->tr = std::make_unique<NetTransport>(net);
   c->host_ops = std::make_unique<HostOps>(c->tr);
   set_op_tag(c);
+  device_eager_init(c);
   *out = c;
   return hxcclSuccess;
 }

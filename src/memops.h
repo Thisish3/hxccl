@@ -84,6 +84,8 @@ class DeviceOps : public MemOps {
   void release(void* p) override;
   Transport& tr() override;
   hxcclResult_t sync();  // wait for the stream
+  bool staged() const;   // device data goes through host memory, not CUDA IPC
+  hxcclResult_t broken(std::string* why) const;  // a failed transfer, sticky (I5)
 
  private:
   cudaStream_t stream_ = nullptr;

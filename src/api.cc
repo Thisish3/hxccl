@@ -16,7 +16,7 @@ hxcclResult_t hxcclAllReduce(const void* send, void* recv, size_t count, hxcclDa
                              hxcclRedOp_t op, hxcclComm_t c, hxcclStream_t stream) {
   if (hxcclResult_t r = check_args(c, send, recv, count, 1, dt)) return r;
   OpPlan p;
-  if (hxcclResult_t r = plan_op(c, op, dt, &p)) return r;
+  if (hxcclResult_t r = plan_op(c, op, dt, &p, stream)) return r;
   const size_t es = dtype_size(dt);
   const Algo algo = choose_allreduce(count * es);
   const size_t largest =
@@ -48,7 +48,7 @@ hxcclResult_t hxcclReduceScatter(const void* send, void* recv, size_t recvcount,
                                  hxcclStream_t stream) {
   if (hxcclResult_t r = check_args(c, send, recv, recvcount, c ? c->nranks : 1, dt)) return r;
   OpPlan p;
-  if (hxcclResult_t r = plan_op(c, op, dt, &p)) return r;
+  if (hxcclResult_t r = plan_op(c, op, dt, &p, stream)) return r;
   if (hxcclResult_t r = check_message(c, recvcount * dtype_size(dt))) return r;
   return dispatch(c, [=] {
     return run_on(c, stream, send, recv, "hxccl:reducescatter", [&](MemOps& m) {

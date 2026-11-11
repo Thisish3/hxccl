@@ -35,7 +35,8 @@ target_include_directories(hxccl PUBLIC include PRIVATE src)
 target_link_libraries(hxccl PUBLIC MPI::MPI_CXX)
 if(HXCCL_CUDA)
   target_compile_definitions(hxccl PUBLIC HXCCL_CUDA=1)
-  target_link_libraries(hxccl PUBLIC CUDA::cudart)
+  # cuda_driver: memspace_cuda.cc asks whether a CUDA context exists without creating one
+  target_link_libraries(hxccl PUBLIC CUDA::cudart CUDA::cuda_driver)
   # NVTX3 is header-only; CMake < 3.25 has no CUDA::nvtx3 and the cudart include dir has it
   if(TARGET CUDA::nvtx3)
     target_link_libraries(hxccl PUBLIC CUDA::nvtx3)
@@ -82,8 +83,55 @@ function(hxccl_gpu_test name)
              COMMAND ${MPIEXEC_EXECUTABLE} --oversubscribe -x HXCCL_BOOTSTRAP=socket
                      ${MPIEXEC_NUMPROC_FLAG} ${np} $<TARGET_FILE:${name}>)
     set_tests_properties(${name}_np${np}_sock PROPERTIES TIMEOUT 120)
+    # device data through host memory instead of CUDA IPC (the fallback path)
+    add_test(NAME ${name}_np${np}_staged
+             COMMAND ${MPIEXEC_EXECUTABLE} --oversubscribe -x HXCCL_DEVICE_TRANSPORT=staged
+                     ${MPIEXEC_NUMPROC_FLAG} ${np} $<TARGET_FILE:${name}>)
+    set_tests_properties(${name}_np${np}_staged PROPERTIES TIMEOUT 120)
+    add_test(NAME ${name}_np${np}_staged_sock
+             COMMAND ${MPIEXEC_EXECUTABLE} --oversubscribe -x HXCCL_DEVICE_TRANSPORT=staged
+                     -x HXCCL_BOOTSTRAP=socket ${MPIEXEC_NUMPROC_FLAG} ${np}
+                     $<TARGET_FILE:${name}>)
+    set_tests_properties(${name}_np${np}_staged_sock PROPERTIES TIMEOUT 120)
   endforeach()
 endfunction()
+# Reproductions of the Mac review findings I1-I5 (docs/desktop/b-review-fixes.md). A hang shows
+# up as a TIMEOUT failure, so every one has a short limit. FIRST_ENV is given to rank 0 only
+# (MPMD), the other ranks run without it. Each also runs on socket communicators.
+function(hxccl_repro_test name np first_env)
+  set(variant "${ARGV3}")  # optional: a second registration of the same test
+  if(NOT TARGET ${name})
+    add_executable(${name} tests/${name}.cc)
+    target_include_directories(${name} PRIVATE src tests)
+    target_link_libraries(${name} PRIVATE hxccl)
+  endif()
+  foreach(boot mpi socket)
+    set(b "")
+    if(boot STREQUAL "socket")
+      set(b -x HXCCL_BOOTSTRAP=socket)
+    endif()
+    if(first_env STREQUAL "")
+      set(cmd ${MPIEXEC_EXECUTABLE} --oversubscribe ${b} ${MPIEXEC_NUMPROC_FLAG} ${np}
+              $<TARGET_FILE:${name}>)
+    else()
+      math(EXPR rest "${np} - 1")
+      set(cmd ${MPIEXEC_EXECUTABLE} --oversubscribe ${MPIEXEC_NUMPROC_FLAG} 1 ${b}
+              -x ${first_env} $<TARGET_FILE:${name}> : ${MPIEXEC_NUMPROC_FLAG} ${rest} ${b}
+              $<TARGET_FILE:${name}>)
+    endif()
+    add_test(NAME ${name}${variant}_np${np}_${boot} COMMAND ${cmd})
+    set_tests_properties(${name}${variant}_np${np}_${boot} PROPERTIES TIMEOUT 60)
+  endforeach()
+endfunction()
+if(HXCCL_CUDA)
+  hxccl_repro_test(repro_p2p_first_partial 4 "")
+  hxccl_repro_test(repro_init_failure 2 "HXCCL_IPC_CHUNK=99999999999999")
+  hxccl_repro_test(repro_init_failure 2 "HXCCL_TEST_FAIL_DEVICE_INIT=1" _inject)
+  hxccl_repro_test(repro_two_comm_group 2 "")
+  hxccl_repro_test(repro_device_scalar 2 "")
+  hxccl_repro_test(repro_peer_failure 2 "HXCCL_TEST_FAIL_DEVICE_COPY=1")
+endif()
+
 if(HXCCL_CUDA)
   file(GLOB GPU_TEST_SRC CONFIGURE_DEPENDS tests/gpu_*.cc)
   foreach(src ${GPU_TEST_SRC})
