@@ -262,10 +262,10 @@ bool SockMesh::read_some(int peer) {
       len = p.hdr.bytes - p.body_got;
     } else if (p.dest_req >= 0 && !p.dest_cancelled && p.body_got < p.dest_cap) {
       dst = p.dest_buf + p.body_got;
-      len = std::min(p.hdr.bytes, p.dest_cap) - p.body_got;
+      len = std::min<size_t>(p.hdr.bytes, p.dest_cap) - p.body_got;
     } else {  // truncated tail or cancelled receive: drop the bytes
       dst = scratch_.data();
-      len = std::min(scratch_.size(), p.hdr.bytes - p.body_got);
+      len = std::min<size_t>(scratch_.size(), p.hdr.bytes - p.body_got);
     }
     const ssize_t n = recv(p.fd, dst, len, 0);
     if (n == 0) {
@@ -396,8 +396,19 @@ uint32_t local_addr() {
   return a.s_addr;
 }
 
+// SOCK_CLOEXEC and accept4 are Linux-only; macOS sets FD_CLOEXEC afterwards.
+int cloexec_socket() {
+#ifdef SOCK_CLOEXEC
+  return socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+#else
+  const int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd >= 0) fcntl(fd, F_SETFD, FD_CLOEXEC);
+  return fd;
+#endif
+}
+
 hxcclResult_t listen_on(uint32_t addr, int* fd, uint16_t* port, std::string* err) {
-  *fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  *fd = cloexec_socket();
   if (*fd < 0) return *err = sys_error("socket"), hxcclSystemError;
   int one = 1;
   setsockopt(*fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
@@ -419,7 +430,7 @@ hxcclResult_t listen_on(uint32_t addr, int* fd, uint16_t* port, std::string* err
 hxcclResult_t connect_to(uint32_t addr, uint16_t port, int* fd, std::string* err) {
   const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds(30);
   for (;;) {
-    *fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    *fd = cloexec_socket();
     if (*fd < 0) return *err = sys_error("socket"), hxcclSystemError;
     sockaddr_in sa{};
     sa.sin_family = AF_INET;
@@ -464,7 +475,12 @@ bool read_all(int fd, void* buf, size_t n) {
 
 int accept_one(int lfd) {
   for (;;) {
+#ifdef SOCK_CLOEXEC
     const int c = accept4(lfd, nullptr, nullptr, SOCK_CLOEXEC);
+#else
+    const int c = accept(lfd, nullptr, nullptr);
+    if (c >= 0) fcntl(c, F_SETFD, FD_CLOEXEC);
+#endif
     if (c >= 0 || errno != EINTR) return c;
   }
 }
