@@ -7,33 +7,14 @@
 #include <type_traits>
 #include <vector>
 
+#include "elem.h"
 #include "fp.h"
 
 namespace {
 
 template <typename T>
 void apply(T* d, const T* s, size_t n, hxcclRedOp_t op) {
-  // integer sum/prod wrap like the GPU does; unsigned math keeps signed overflow defined
-  using U = typename std::conditional_t<std::is_integral_v<T>, std::make_unsigned<T>,
-                                        std::common_type<T>>::type;
-  switch (op) {
-    case hxcclSum:
-      for (size_t i = 0; i < n; ++i)
-        d[i] = static_cast<T>(static_cast<U>(d[i]) + static_cast<U>(s[i]));
-      break;
-    case hxcclProd:
-      for (size_t i = 0; i < n; ++i)
-        d[i] = static_cast<T>(static_cast<U>(d[i]) * static_cast<U>(s[i]));
-      break;
-    case hxcclMax:
-      for (size_t i = 0; i < n; ++i) d[i] = std::max(d[i], s[i]);
-      break;
-    case hxcclMin:
-      for (size_t i = 0; i < n; ++i) d[i] = std::min(d[i], s[i]);
-      break;
-    default:
-      break;
-  }
+  for (size_t i = 0; i < n; ++i) d[i] = elem_apply<T>(d[i], s[i], op);
 }
 
 // fp16/bf16/fp8: widen to float, reduce, round back. NCCL computes fp8 sum/prod in half;
@@ -41,14 +22,7 @@ void apply(T* d, const T* s, size_t n, hxcclRedOp_t op) {
 // paths give identical fp8 results for sum and prod.
 template <typename S, float (*ToF)(S), S (*FromF)(float)>
 void apply_small(S* d, const S* s, size_t n, hxcclRedOp_t op) {
-  for (size_t i = 0; i < n; ++i) {
-    const float a = ToF(d[i]), b = ToF(s[i]);
-    const float r = op == hxcclSum    ? a + b
-                    : op == hxcclProd ? a * b
-                    : op == hxcclMax  ? std::fmax(a, b)
-                                      : std::fmin(a, b);
-    d[i] = FromF(r);
-  }
+  for (size_t i = 0; i < n; ++i) d[i] = elem_apply_small<S, ToF, FromF>(d[i], s[i], op);
 }
 
 }  // namespace
@@ -134,11 +108,10 @@ void scale_into(void* dst, const void* src, size_t n, hxcclDataType_t dt, const 
 
 void divide_trunc(void* buf, size_t n, hxcclDataType_t dt, int divisor) {
   // divide in 64 bits: nranks need not fit the element type (int8 at 200 ranks)
-#define HX_DIV(DT, T, W)                                                               \
-  case DT:                                                                             \
-    for (size_t i = 0; i < n; ++i)                                                     \
-      static_cast<T*>(buf)[i] =                                                        \
-          static_cast<T>(static_cast<W>(static_cast<T*>(buf)[i]) / static_cast<W>(divisor)); \
+#define HX_DIV(DT, T, W)                                                          \
+  case DT:                                                                        \
+    for (size_t i = 0; i < n; ++i)                                                \
+      static_cast<T*>(buf)[i] = elem_div<T, W>(static_cast<T*>(buf)[i], divisor); \
     break;
   switch (dt) {
     HX_DIV(hxcclInt8, int8_t, int64_t)
