@@ -2,3 +2,5 @@ build/
 .superpowers/
 .cache/
 build-cuda/
+*.nsys-rep
+*.sqlite
