@@ -98,3 +98,18 @@
     - R22에서 본 replay 중 DRAM 0.81 GHz 하락은 이번에 재현되지 않았다(이번에는 `--set full`인데도 6.78 GHz). R22 때 무엇이 달랐는지는 **원인 미확인**이다.
     - Nsight Compute GUI 캡처도 같은 이유로 못 했다. `.ncu-repz`(142 KB)와 details 텍스트를 커밋한다.
   - **커밋한 보고서:** `.nsys-rep` 6개(각 0.31~0.40 MB, `.gitignore`에 걸려 `-f`로 추가). SQLite(각 0.8~1.1 MB)는 `nsys export --type sqlite`로 다시 만들 수 있어 커밋하지 않았다.
+- **R39** (Nsight GUI 캡처, 사용자 요청 "GUI를 캡처해 보자")
+  - **방식:** R38에서는 GUI를 캡처하지 못했다. hxgemm과 같은 방식으로 WSL 안의 GUI를 WSLg에 띄우고 X11 XTEST로 조작해 창 단위로 캡처했다. 대상은 Nsight Systems 2026.3.2와 Nsight Compute 2026.3.1이다. 조작 도구는 `tools/nsight_gui.py`(창 id 지정, drag·우클릭·문자 입력·스크롤 추가)다.
+  - **그림:**
+    - Nsight Systems 3장: `fig_b_nsys_64k.png`, `fig_b_nsys_64m.png`, `fig_b_nsys_r0r1.png`. r0r1은 File → New multi-report view로 두 보고서를 한 시간축에 놓았다.
+    - Nsight Compute 2장: `fig_b_ncu_sol.png`, `fig_b_ncu_memory.png`.
+    - R38의 matplotlib 그림 3장은 교차 확인용 보조 자료로 남겼다(같은 호출, 같은 숫자).
+  - **겪은 문제:**
+    - 처음에는 X11 창 목록에 아무 창도 잡히지 않았다. "사용 데이터 수집 동의" 대화 상자가 메인 창을 막고 있었다. **No**(수집 안 함)를 눌렀다.
+    - Nsight Systems 2026.3.2는 이어서 EGL 초기화 실패로 죽었다(충돌 보고는 보내지 않음). `QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu`로 띄우니 정상이었다.
+    - XWayland에서는 루트 창 캡처가 BadMatch로 막혀서, 우클릭 메뉴 같은 팝업 창을 따로 찾아 찍었다.
+  - **GUI에서 확인한 숫자:** 앞선 데이터 그림과 같다.
+    - 64K: 호출 3.581 ms, 첫 `ipc:copy` 2.080 ms
+    - 64M: 호출 11.576 ms, 첫 `ipc:copy` 2.532 ms
+    - 4M: rank 1의 첫 copy 2.103 ms 동안 rank 0이 2.188 ms 기다림
+    - ncu: 32.16 µs, DRAM 89.63 %, 389.06 GB/s, 읽기 8.39 MB, 쓰기 4.12 MB
