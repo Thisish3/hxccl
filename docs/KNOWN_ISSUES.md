@@ -18,7 +18,6 @@ Open problems, deferred review findings and unexplained observations. Update thi
 | 16 | **Device calls return only when the work is done.** NCCL queues the work on the stream and returns; hxccl waits for the stream (`sync_ops`). | `src/run.h`, `src/memspace_cuda.cc` | Spec 3.5: simple and certain first | When a stream-ordered design replaces the MPI READY/DONE handshake |
 | 17 | **A group cannot mix host and device Send/Recv** and returns `hxcclInvalidUsage`. The host transport blocks in `MPI_Waitall` while the device transport polls, so mixing them could stall a peer. | `src/group.cc` | Avoids a possible deadlock | When both transports progress from one loop |
 | 18 | **All ranks must pass the same kind of buffer (host or device) to a collective.** The first device call on a communicator runs a collective setup step (`MPI_Allgather` of IPC handles). There is no check, so a rank that passes host buffers while the others pass device buffers hangs the call. Count-0 calls with NULL buffers go down the host path. | `src/memspace_cuda.cc` | Checking would cost an agreement round on every call | If a real user hits it |
-| 19 | **The PyTorch backend needs `mpirun`.** Communicators come from `MPI_COMM_WORLD`, so `torchrun` processes cannot find each other. | `python/hxccl_torch` | Needs a socket bootstrap | E |
 | 20 | **Every PyTorch `Work` is complete when returned**, `async_op=True` included. Failures are raised as exceptions from the call itself, not through `Work.wait()`. | `python/hxccl_torch/csrc/backend.cpp` | Follows from #16 | With #16 |
 
 ### Performance and implementation
@@ -38,6 +37,9 @@ Open problems, deferred review findings and unexplained observations. Update thi
 | 30 | M1: the PyTorch backend uses the current device's stream, not the tensor's device, and sets no `CUDAGuard`. Not reproducible with one GPU. | `python/hxccl_torch/csrc/backend.cpp` |
 | 31 | M2: the PyTorch `send`/`recv` ignore `tag` and use `ts[0]` without checking the list size. | `python/hxccl_torch/csrc/backend.cpp` |
 | 32 | M4: device collectives still apply the MPI per-message `INT_MAX` limit (`check_message`), although the IPC path sends chunks. | `src/checks.cc` |
+| 33 | Under `torchrun` the device path uses the staged transport (device -> host -> TCP -> host -> device), because CUDA IPC handles cannot be opened without the ptrace permission that OpenMPI's `MPI_Init` grants (LEDGER E4). At 256 MiB it is 10.8-12.6x slower than IPC and 4.1x slower than gloo (README, E). Not tried: pinned host buffers, pipelining the copies with the TCP transfer, an opt-in `PR_SET_PTRACER`. | `src/transport_ipc.cc` |
+| 34 | The socket host transport is 2.5-2.8x slower than MPI at 4 KiB and 1.3-1.4x slower from 16 MiB up (README, E). Where the time goes was not measured. | `src/net_sock.cc` |
+| 35 | The device-path floor (about 3.2 ms at np2, 6.6 ms at np4) is the same on the staged path, which makes no IPC copies. So it is not the IPC copy itself; its cause is not confirmed (README, E; B Nsight figures show it as the first long `cudaStreamSynchronize` of a call). | `src/memops_device.cc`, `src/transport_ipc.cc` |
 
 ### Tests
 
@@ -67,3 +69,4 @@ Open problems, deferred review findings and unexplained observations. Update thi
 | `cancel_all` used `MPI_Cancel` on send requests, which MPI-4 deprecates | 4deac21 |
 | The fp8 comment said "via half" while the code computes in float (its later "both exact" justification was also wrong; an exhaustive check now backs the claim); spec 6 promised InvalidUsage after Abort although Abort frees the handle | 4deac21 |
 | #26: the extra GPU memory (about 115 MiB per rank) in host-only runs of the `HXCCL_CUDA` build came from `hxccl_perf` calling `cudaSetDevice(0)` unconditionally, not from the library as first written. Measured: `cudaPointerGetAttributes` on a host pointer leaves the primary context inactive (CUDA 12.2), and with `hxccl_perf` fixed, host np4 runs stay at idle GPU memory (441 MiB) with the library before and after. The new test `gpu_host_no_context` checks that host-only calls create no context. | 5970b09 |
+| #19: the PyTorch backend needed `mpirun` (no `torchrun`). E bootstraps communicators over TCP sockets, so `torchrun` works; see #33 for its device-path speed | e-socket |

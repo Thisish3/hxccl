@@ -113,3 +113,11 @@
     - 64M: 호출 11.576 ms, 첫 `ipc:copy` 2.532 ms
     - 4M: rank 1의 첫 copy 2.103 ms 동안 rank 0이 2.188 ms 기다림
     - ncu: 32.16 µs, DRAM 89.63 %, 389.06 GB/s, 읽기 8.39 MB, 쓰기 4.12 MB
+- **E6** (Task E3) E2에서 import 때 `MPI_Init`을 없앤 뒤로는 **mpirun에서도** PyTorch device 경로가 staged로 갔다. `HXCCL_DEBUG`로 확인했는데, 큰 텐서에서 약 12배 느린 후퇴였다. mpirun으로 띄운 경우(`OMPI_COMM_WORLD_SIZE`가 있을 때)에만 import 때 `MPI_Init_thread`를 다시 부르게 고쳤다. 이제 mpirun은 IPC, torchrun은 staged다. torchrun·mpirun np2·np4 pytest 모두 37 passed, 3 skipped. 이것은 OpenMPI의 원래 동작을 되살린 것이다(라이브러리가 `prctl`을 부르지는 않는다).
+- **E7** (Task E3) 측정
+  - 조건: SM 1500 MHz 고정, 샘플 271 + 16개 모두 1500. 데이터와 표: `scripts/measure_e.sh`, README "Measurements (E)".
+  - 소켓 host 전송: MPI보다 4 KiB에서 2.5~2.8배, 16 MiB 이상에서 1.3~1.4배 느리다.
+  - IPC 제어를 소켓으로 보내도 MPI와 거의 같다.
+  - staged 경로(= torchrun의 device 경로): 256 MiB에서 IPC보다 10.8~12.6배, gloo보다 4.1배 느리다(KNOWN_ISSUES #33).
+  - PyTorch mpirun: np2 256 MiB 41.8 ms로 C 측정(41.5 ms)과 같다. torchrun은 559 ms.
+  - 바닥값(np2 약 3.2 ms)이 IPC copy가 없는 staged 경로에도 똑같이 있다. 그러니 IPC copy 자체가 원인은 아니다. **원인 미확인**(#35).

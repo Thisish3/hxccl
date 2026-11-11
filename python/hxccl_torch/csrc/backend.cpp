@@ -8,6 +8,7 @@
 #include <torch/csrc/distributed/c10d/Work.hpp>
 #include <torch/python.h>
 
+#include <cstdlib>
 #include <cstring>
 
 #include "hxccl.h"
@@ -171,7 +172,16 @@ void finalize() {
 
 // The backend builds its communicator with hxcclGetUniqueId/InitRank over sockets (spec E),
 // so it needs no MPI: it runs under torchrun as well as mpirun.
+// Under mpirun (OMPI_COMM_WORLD_SIZE set) it still initializes MPI as before: without that
+// the CUDA IPC handles could not be opened and the device path fell back to the slow staged
+// path (LEDGER E6, measured 2026-11-11). torchrun processes never touch MPI.
 PYBIND11_MODULE(_C, m) {
+  int inited = 0;
+  MPI_Initialized(&inited);
+  if (!inited && std::getenv("OMPI_COMM_WORLD_SIZE")) {
+    int provided = 0;
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
+  }
   m.def("create_backend", &create_backend);
   m.def("finalize", &finalize);
 }

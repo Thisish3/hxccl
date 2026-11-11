@@ -1,0 +1,11 @@
+# hxccl_perf op=allreduce nranks=2 iters=20 warmup=5 mem=device (median of rank-max)
+     size(B)        count   hxccl_us     algbw     busbw     mpi_us     algbw     busbw   algo    mem
+        4096         1024     3224.7     0.001     0.001          -         -         -     rd device
+       16384         4096     3313.2     0.005     0.005          -         -         -     rd device
+       65536        16384     3498.2     0.019     0.019          -         -         -   ring device
+      262144        65536     3668.6     0.071     0.071          -         -         -   ring device
+     1048576       262144     3526.4     0.297     0.297          -         -         -   ring device
+     4194304      1048576     3503.0     1.197     1.197          -         -         -   ring device
+    16777216      4194304     4751.2     3.531     3.531          -         -         -   ring device
+    67108864     16777216    11128.9     6.030     6.030          -         -         -   ring device
+   268435456     67108864    44618.7     6.016     6.016          -         -         -   ring device

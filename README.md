@@ -4,8 +4,9 @@ A small NCCL-style collective communication library, built step by step to under
 
 > **Status: A (core), A2 (full CPU-side NCCL/RCCL API), B (GPU buffers over CUDA IPC) and C (PyTorch `torch.distributed` backend) done.**
 >
-> - **Coverage:** every collective plus Send/Recv and Group runs on host or device buffers, and device results match the CPU path bit for bit. `dist.init_process_group("hxccl")` works under `mpirun`. B and C were measured on one GPU only (see the B and C sections below).
-> - **Not done yet:** comparison with RCCL/NCCL on real multi-GPU hardware (D), a socket bootstrap so that `torchrun` works (E), calls that return before the work finishes, and running on HIP.
+> - **Coverage:** every collective plus Send/Recv and Group runs on host or device buffers, and device results match the CPU path bit for bit. B and C were measured on one GPU only (see the B and C sections below).
+> - **E, first part (branch `e-socket`):** `hxcclGetUniqueId`/`hxcclCommInitRank` bootstrap over TCP sockets without MPI. So `dist.init_process_group("hxccl")` works under `torchrun` as well as `mpirun`. Under `torchrun` the device path is much slower; see the E section.
+> - **Not done yet:** comparison with RCCL/NCCL on real multi-GPU hardware (D), multi-node sockets and bootstrap timeouts (rest of E), calls that return before the work finishes, and running on HIP.
 >
 > Not affiliated with NVIDIA NCCL, AMD RCCL or Huawei HCCL.
 
@@ -217,18 +218,20 @@ Usage limits (B):
 ```bash
 cmake -S . -B build-cuda -DHXCCL_CUDA=ON && cmake --build build-cuda -j
 cd python && CUDA_HOME=/usr/local/cuda pip install -e . --no-build-isolation && cd ..
-mpirun -np 2 python train.py
+torchrun --nproc-per-node 2 train.py    # or: mpirun -np 2 python train.py
 ```
 ```python
-import hxccl_torch                      # registers "hxccl"; fills RANK/WORLD_SIZE from OpenMPI
+import hxccl_torch                      # registers "hxccl" (under mpirun, fills RANK/WORLD_SIZE)
 import torch.distributed as dist
 dist.init_process_group("hxccl")
 dist.all_reduce(t)                      # t: a contiguous CUDA tensor
 ```
 
 - **Supported calls:** `all_reduce` (SUM, PRODUCT, MIN, MAX, AVG), `all_gather_into_tensor`, `reduce_scatter_tensor`, `broadcast`, `send`, `recv` and `barrier`. Each call returns an already completed `Work`.
-- **Launch with `mpirun`, not `torchrun`.** Communicators are built from `MPI_COMM_WORLD`, so `torchrun` is not supported. Socket bootstrap is left for stage E.
-- **Tests:** `mpirun -np {2,4} python -m pytest -q python/tests` compares the results against the `gloo` backend: 37 passed, 3 skipped (gloo has no integer AVG).
+- **`torchrun` and `mpirun` both work (E).** The communicator is bootstrapped over TCP sockets.
+  - **Under `mpirun`:** the extension initializes MPI, and device data moves over CUDA IPC.
+  - **Under `torchrun`:** with Linux Yama `ptrace_scope=1`, the CUDA IPC handles cannot be opened (LEDGER E4). Every rank then agrees on a staged path through host memory and TCP, which is up to 13× slower for large tensors (E section).
+- **Tests:** `torchrun --nproc-per-node {2,4} -m pytest` and `mpirun -np {2,4} python -m pytest -q python/tests` compare the results against the `gloo` backend: 37 passed, 3 skipped (gloo has no integer AVG).
 
 ### Measurements (C)
 
@@ -247,6 +250,33 @@ Date: 2026-11-11, same machine and SM clock lock as B (all 42 samples at 1500 MH
 - **Up to 4 MiB gloo is faster;** hxccl carries the B device-path floor of about 3.2 ms at np2 and 6.3–9.5 ms at np4. **From 16 MiB up hxccl is faster:** 2.1–3.3× at np2 and 2.8–4.6× at np4.
 - **These are not the same kind of transfer.** gloo moves CPU memory over TCP, and hxccl copies inside one GPU, so this table compares the two backends as they run here, not as transports.
 - **PyTorch NCCL is not in the table.** With 2 ranks on one GPU it fails at the first collective: `ncclInvalidUsage ... Duplicate GPU detected : rank 0 and rank 1 both on CUDA device 1000` (NCCL 2.27.5, spec "환경 기록").
+
+## Measurements (E: socket communicators and torchrun)
+
+Date: 2026-11-11, same machine as B. The SM clock was locked at 1500 MHz: all 271 + 16 one-second samples read 1500 MHz (`docs/results/2026-11-11_e_clocks.csv`, `_e_torch_mpirun_clocks.csv`).
+
+Method:
+- **`hxccl_perf`** (`scripts/measure_e.sh`): fp32 sum AllReduce, 4 KiB–256 MiB in steps of 4×, 5 warm-up calls, median of 20. Raw tables: `docs/results/2026-11-11_e_allreduce_np{2,4}_*.txt`.
+- **Socket rows:** `HXCCL_BOOTSTRAP=socket` makes `hxcclCommInitMPI` build a socket communicator over the same ranks.
+- **"staged":** forced with `HXCCL_DEVICE_TRANSPORT=staged`. This is the path the device buffers take under `torchrun`.
+- **PyTorch:** `python/bench_allreduce.py`, data in `docs/results/2026-11-11_e_torch_allreduce.csv`.
+
+AllReduce median time (ms):
+
+| size | host MPI | host socket | device IPC, MPI control | device IPC, socket control | device staged | torch `torchrun` | torch `mpirun` |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| np2, 4 KiB | 0.0036 | 0.0092 | 3.22 | 3.30 | 3.35 | 3.20 | 3.30 |
+| np2, 1 MiB | 0.39 | 0.52 | 3.53 | 3.82 | 4.20 | 4.12 | 3.51 |
+| np2, 16 MiB | 13.7 | 18.3 | 4.75 | 5.44 | 35.8 | 35.2 | 4.77 |
+| np2, 256 MiB | 207 | 296 | 44.6 | 44.9 | 562 | 559 | 41.8 |
+| np4, 4 KiB | 0.0071 | 0.0197 | 6.64 | 6.67 | 6.63 | 6.09 | 6.30 |
+| np4, 16 MiB | 30.2 | 42.7 | 11.2 | 11.1 | 78.1 | 81.8 | 10.7 |
+| np4, 256 MiB | 523 | 686 | 111 | 111 | 1198 | 1194 | 107 |
+
+- **Socket host transport vs MPI:** 2.5–2.8× slower at 4 KiB and 1.3–1.4× slower from 16 MiB up. The socket transport goes through TCP loopback. Which OpenMPI transport the MPI rows used (shared memory is likely) was not checked.
+- **IPC control over sockets vs MPI:** almost the same (np4 rows match within 1 %). The control messages are small.
+- **The staged path is the slow one.** At 256 MiB it is 12.6× (np2) and 10.8× (np4) slower than IPC. It is even slower than the socket host transport, because it adds a device→host and a host→device copy around it. The torch numbers under `torchrun` follow the staged column, and under `mpirun` the IPC column. Against `gloo` from the C section (np2, 256 MiB: 136 ms), hxccl under `torchrun` is 4.1× slower.
+- **The 3.2 ms (np2) / 6.6 ms (np4) floor is the same on the staged path,** which makes no IPC copies at all. So the floor is not the IPC copy itself (B Nsight figures). Its cause is not confirmed.
 
 ## License
 
