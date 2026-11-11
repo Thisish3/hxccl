@@ -85,3 +85,16 @@
   - 재현 테스트 12/12(하나씩), `gpu_no_ptracer` np2·np4 통과(staged로 합의)
   - CPU 빌드 156/156, CUDA 빌드 258/258(staged·소켓 변형 포함)
   - PyTorch torchrun·mpirun np2·np4 각각 37 passed, 3 skipped
+- **R38** (Nsight 캡처, `docs/desktop/nsight-captures.md`)
+  - **Nsight Systems 그림:** 데스크탑 세션에서는 Windows GUI를 띄워 캡처할 수 없었다. 지시의 대체안대로, 보고서의 SQLite 데이터(NVTX와 CUDA API 구간)로 matplotlib 그림 3장을 그렸다(`scripts/plot_b_timeline.py`, `docs/results/figs/`). **GUI 화면이 아니라 보고서 데이터로 그린 그림이다.** GPU 트레이스가 없어서 모든 막대는 CPU 쪽 시간이다(R21).
+  - **그림에서 새로 보인 것:**
+    - device AllReduce 한 번의 바닥값(64K에서 3.58 ms) 중 가장 큰 부분은 **첫 `ipc:copy`의 `cudaStreamSynchronize` 한 번**이다: 64K에서 2080 µs, 64M에서 2532 µs. 나머지 copy는 0.1~0.3 ms다.
+    - 4M에서 두 rank를 같은 시간축에 놓으면, rank 1의 이 긴 첫 동기화가 끝난 뒤에야 rank 0의 첫 copy가 시작한다.
+    - 첫 동기화가 왜 2 ms인지는 **원인 미확인**이다. KNOWN_ISSUES #21의 "나머지"는 이것과 그 대기로 보이지만, 측정은 이 그림까지다.
+  - **Nsight Compute 재측정:**
+    - 조건: SM 클럭을 `nvidia-smi -lgc 1500,1500`으로 고정한 상태(사용자). 측정 전후 1500/7000 MHz.
+    - 명령: `/usr/local/cuda/bin/ncu --clock-control none --set full`로 fp32 sum 1<<20 원소 `k_reduce<float>` 한 번(13번째 launch)만 쟀다.
+    - 결과: 32.16 µs, DRAM read 8.39 MB + write 4.12 MB, **389 GB/s(정격 448 GB/s의 86.8%)**. ncu DRAM Throughput 89.6%. replay 중 실측 클럭은 SM 1.47 GHz, DRAM 6.78 GHz. 기존 1 pass 값(31.5 µs, 386 GB/s)과 2% 안에서 같다.
+    - R22에서 본 replay 중 DRAM 0.81 GHz 하락은 이번에 재현되지 않았다(이번에는 `--set full`인데도 6.78 GHz). R22 때 무엇이 달랐는지는 **원인 미확인**이다.
+    - Nsight Compute GUI 캡처도 같은 이유로 못 했다. `.ncu-repz`(142 KB)와 details 텍스트를 커밋한다.
+  - **커밋한 보고서:** `.nsys-rep` 6개(각 0.31~0.40 MB, `.gitignore`에 걸려 `-f`로 추가). SQLite(각 0.8~1.1 MB)는 `nsys export --type sqlite`로 다시 만들 수 있어 커밋하지 않았다.

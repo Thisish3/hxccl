@@ -195,6 +195,8 @@ Time breakdown from Nsight Systems (`scripts/nsys_b.sh`, np2, 25 calls including
 - **Each chunk copy is slow.** The median `ipc:copy` is 0.14–0.15 ms, even for a 32 KiB chunk. Median `cudaStreamSynchronize` is 0.13–0.15 ms. Why one synchronize takes that long on WSL2 is not confirmed.
 - **The "rest" column is not split further.** The MPI READY/DONE waits were not traced (`-t mpi` recorded only `MPI_Init`/`MPI_Finalize`), so how the remainder divides between waiting and other work is not confirmed.
 
+Figures for the time breakdown are in [`docs/results/figs/`](docs/results/figs/README.md). They are drawn from the Nsight Systems report data, not GUI screenshots. They show that the largest part of the device floor is the first `ipc:copy` synchronize of a call (about 2 ms; cause not confirmed).
+
 Reduction kernel (Nsight Compute 2026.3.1, `--clock-control none`, `k_reduce<float>`, 1<<20 elements, fp32 sum). Results are in `docs/results/2026-11-11_b_ncu_reduce.txt`.
 
 | collection | time | DRAM read + write | DRAM clock (measured) | throughput |
