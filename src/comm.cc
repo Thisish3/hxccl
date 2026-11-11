@@ -143,6 +143,7 @@ hxcclResult_t hxcclCommShrink(hxcclComm_t comm, int* excl, int nexcl, hxcclComm_
 hxcclResult_t hxcclCommAbort(hxcclComm_t comm) {
   if (!comm) return hxcclInvalidArgument;
   // local teardown only: MPI_Comm_free may need peers, so the MPI handle is leaked on purpose
+  comm->dev_ops.reset();
   comm->host_ops.reset();
   comm->tr.reset();
   delete comm;
@@ -163,6 +164,7 @@ hxcclResult_t hxcclCommGetAsyncError(hxcclComm_t comm, hxcclResult_t* err) {
 
 hxcclResult_t hxcclCommDestroy(hxcclComm_t comm) {
   if (!comm) return hxcclInvalidArgument;
+  comm->dev_ops.reset();
   comm->host_ops.reset();
   comm->tr.reset();
   if (comm->mpi != MPI_COMM_NULL) MPI_Comm_free(&comm->mpi);
@@ -210,14 +212,20 @@ const char* hxcclGetLastError(hxcclComm_t comm) {
 
 hxcclResult_t hxcclCommGetStats(hxcclComm_t comm, uint64_t* bytes, uint64_t* msgs) {
   if (!comm || !bytes || !msgs) return hxcclInvalidArgument;
+  // user data only, summed over the host (MPI) and device (IPC) transports
   *bytes = comm->tr->bytes_sent;
   *msgs = comm->tr->msgs_sent;
+  if (comm->dev_ops) {
+    *bytes += comm->dev_ops->tr().bytes_sent;
+    *msgs += comm->dev_ops->tr().msgs_sent;
+  }
   return hxcclSuccess;
 }
 
 hxcclResult_t hxcclCommResetStats(hxcclComm_t comm) {
   if (!comm) return hxcclInvalidArgument;
   comm->tr->bytes_sent = comm->tr->msgs_sent = 0;
+  if (comm->dev_ops) comm->dev_ops->tr().bytes_sent = comm->dev_ops->tr().msgs_sent = 0;
   return hxcclSuccess;
 }
 

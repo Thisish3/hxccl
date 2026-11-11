@@ -23,6 +23,7 @@ struct hxcclComm {
   MPI_Comm mpi = MPI_COMM_NULL;
   std::unique_ptr<Transport> tr;
   std::unique_ptr<HostOps> host_ops;  // CPU buffers over `tr`; declared after it, freed first
+  std::unique_ptr<MemOps> dev_ops;    // device buffers (HXCCL_CUDA), created on first use
   std::string last_error;
   std::vector<UserOp> user_ops;
   int op_tag = 0;  // 1..0x7ffe, assigned per communicator in this process

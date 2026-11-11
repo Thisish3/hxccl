@@ -3,8 +3,10 @@
 #include "chunks.h"
 #include "comm.h"
 #include "group.h"
+#include "memspace.h"
 #include "reduce.h"
 #include "select.h"
+#include "trace.h"
 
 #include <cstring>
 #include <vector>
@@ -12,7 +14,7 @@
 extern "C" {
 
 hxcclResult_t hxcclAllReduce(const void* send, void* recv, size_t count, hxcclDataType_t dt,
-                             hxcclRedOp_t op, hxcclComm_t c, hxcclStream_t) {
+                             hxcclRedOp_t op, hxcclComm_t c, hxcclStream_t stream) {
   if (hxcclResult_t r = check_args(c, send, recv, count, 1, dt)) return r;
   OpPlan p;
   if (hxcclResult_t r = plan_op(c, op, dt, &p)) return r;
@@ -22,13 +24,19 @@ hxcclResult_t hxcclAllReduce(const void* send, void* recv, size_t count, hxcclDa
       algo == Algo::Ring ? chunk_of(count, c->nranks, 0).len * es : count * es;
   if (hxcclResult_t r = check_message(c, largest)) return r;
   return dispatch(c, [=] {
-    MemOps& m = *c->host_ops;
-    Scratch tmp(m, p.premul ? count * es : 0);
     hxcclResult_t r;
-    const void* in = premul_input(m, p, send, count, dt, tmp, &r);
-    if (r != hxcclSuccess) return ops_fail(c, m, r);
-    if ((r = allreduce_with(c, algo, in, recv, count, dt, p.base)) != hxcclSuccess) return r;
-    return ops_fail(c, m, finish_op(m, p, recv, count, dt));
+    MemOps* m = ops_for(c, stream, send, recv, &r);
+    if (!m) return r;
+    HX_RANGE_PUSH("hxccl:allreduce");
+    {
+      Scratch tmp(*m, p.premul ? count * es : 0);
+      const void* in = premul_input(*m, p, send, count, dt, tmp, &r);
+      if (r == hxcclSuccess) r = allreduce_with(*m, c, algo, in, recv, count, dt, p.base);
+      if (r == hxcclSuccess) r = finish_op(*m, p, recv, count, dt);
+    }
+    if (r == hxcclSuccess) r = sync_ops(*m);
+    HX_RANGE_POP();
+    return ops_fail(c, *m, r);
   });
 }
 hxcclResult_t hxcclAllGather(const void* send, void* recv, size_t sendcount,

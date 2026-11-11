@@ -46,3 +46,42 @@ class MpiTransport : public Transport {
   std::vector<MPI_Request> pending_;
   std::vector<bool> pending_is_send_;
 };
+
+#ifdef HXCCL_CUDA
+#include <cuda_runtime.h>
+
+#include <deque>
+
+// Device buffers over CUDA IPC (spec 3.4). Every rank keeps one staging buffer per sender;
+// data moves with cudaMemcpyAsync into the receiver's staging buffer and is handed over with
+// MPI READY/DONE messages. Every call finishes before it returns.
+class IpcTransport : public Transport {
+ public:
+  IpcTransport(MPI_Comm comm, int rank, int n, size_t chunk);
+  ~IpcTransport() override;
+  hxcclResult_t init();  // collective over comm: allocate staging buffers, exchange handles
+  void set_stream(cudaStream_t s) { stream_ = s; }
+  hxcclResult_t sendrecv(int to, const void* sbuf, size_t sbytes, int from, void* rbuf,
+                         size_t rbytes) override;
+  hxcclResult_t send(int to, const void* buf, size_t bytes) override;
+  hxcclResult_t recv(int from, void* buf, size_t bytes) override;
+  hxcclResult_t isend(int to, const void* buf, size_t bytes, int tag) override;
+  hxcclResult_t irecv(int from, void* buf, size_t bytes, int tag) override;
+  hxcclResult_t waitall() override;
+  void cancel_all() override;
+
+ private:
+  struct Op;
+  hxcclResult_t progress(Op& o, bool* finished);
+  hxcclResult_t progress_self();
+  hxcclResult_t cuda(cudaError_t e, const char* what);
+  hxcclResult_t mpi(int rc, const char* what);
+  MPI_Comm comm_;
+  int rank_, n_;
+  size_t chunk_;
+  cudaStream_t stream_ = nullptr;
+  std::vector<void*> mine_;  // mine_[s]: my staging buffer that sender s writes into
+  std::vector<void*> peer_;  // peer_[p]: rank p's staging buffer reserved for me
+  std::vector<std::deque<Op>> sends_, recvs_;  // per peer, in posting order
+};
+#endif

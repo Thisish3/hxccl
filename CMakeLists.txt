@@ -24,6 +24,7 @@ file(GLOB HXCCL_SRC CONFIGURE_DEPENDS src/*.cc)
 if(HXCCL_CUDA)
   file(GLOB HXCCL_CU CONFIGURE_DEPENDS src/*.cu)
   list(APPEND HXCCL_SRC ${HXCCL_CU})
+  list(FILTER HXCCL_SRC EXCLUDE REGEX "/memspace\\.cc$")  # the CPU-only ops_for
 else()
   list(FILTER HXCCL_SRC EXCLUDE REGEX "(memops_device|transport_ipc|memspace_cuda)\\.cc$")
 endif()

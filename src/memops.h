@@ -63,3 +63,31 @@ class HostOps : public MemOps {
  private:
   std::unique_ptr<Transport>& t_;
 };
+
+#ifdef HXCCL_CUDA
+#include <cuda_runtime.h>
+
+// Device buffers: work is queued on the caller's stream; sync() waits for it.
+class DeviceOps : public MemOps {
+ public:
+  DeviceOps(MPI_Comm comm, int rank, int n, size_t chunk);
+  ~DeviceOps() override;
+  hxcclResult_t init();  // collective over comm: allocate and exchange
+  void set_stream(cudaStream_t s);
+  hxcclResult_t copy(void* dst, const void* src, size_t bytes) override;
+  hxcclResult_t reduce(void* inout, const void* in, size_t count, hxcclDataType_t dt,
+                       hxcclRedOp_t op) override;
+  hxcclResult_t scale(void* dst, const void* src, size_t count, hxcclDataType_t dt,
+                      const void* scalar) override;
+  hxcclResult_t divide_trunc(void* buf, size_t count, hxcclDataType_t dt, int divisor) override;
+  hxcclResult_t alloc(size_t bytes, void** p) override;
+  void release(void* p) override;
+  Transport& tr() override;
+  hxcclResult_t sync();  // wait for the stream
+
+ private:
+  cudaStream_t stream_ = nullptr;
+  std::unique_ptr<IpcTransport> ipc_;
+  hxcclResult_t cuda(cudaError_t e, const char* what);
+};
+#endif
