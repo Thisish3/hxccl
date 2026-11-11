@@ -140,6 +140,54 @@ hxccl time ÷ OpenMPI time:
 - Each cell comes from one run of 20 iterations. Run-to-run spread was not measured for these collectives.
 - The large deviations at 64 KB and 1 MB (Reduce 1.59, Scatter 0.45 and 1.48) were not investigated. OpenMPI's algorithm choice at those sizes was not inspected either.
 
+## Measurements (B: GPU buffers over CUDA IPC, one GPU)
+
+Date: 2026-11-11. RTX 3060 Ti 8 GB (sm_86), Windows driver 581.80, WSL2 Ubuntu 22.04, CUDA 12.2, OpenMPI 4.1.2, build `-DHXCCL_CUDA=ON` Release. SM clock locked at 1500 MHz with `nvidia-smi -lgc 1500,1500`; all 96 one-second samples in `docs/results/2026-11-11_b_clocks.csv` read 1500 MHz. The memory clock was not locked: 66 samples, taken during the host-buffer runs, read 810 MHz, and the rest read 6800–7000 MHz. Method: `scripts/measure_b.sh`, which runs `hxccl_perf -o allreduce` with fp32 sum, 5 warm-up calls, then the median of 20 rank-max wall times. Every call returns when the work is done. Raw tables are in `docs/results/2026-11-11_b_allreduce_np{2,4}_{host,device}.txt`.
+
+**Limit: every rank shares one GPU.** The "transfer" is a copy inside one GPU's memory, so these numbers do not show GPU-to-GPU (NVLink/PCIe) bandwidth. They show where the IPC design spends time.
+
+AllReduce median time (µs):
+
+| size | np2 host | np2 device | np4 host | np4 device |
+|---:|---:|---:|---:|---:|
+| 4 KiB | 3.9 | 3293 | 7.8 | 6654 |
+| 64 KiB | 18.7 | 3351 | 32.5 | 9286 |
+| 1 MiB | 423 | 3476 | 970 | 9557 |
+| 4 MiB | 2984 | 3581 | 5884 | 9818 |
+| 16 MiB | 12219 | 4863 | 32330 | 11262 |
+| 64 MiB | 53247 | 10970 | 128069 | 30065 |
+| 256 MiB | 216332 | 43028 | 516918 | 110449 |
+
+- **Up to 4 MiB the host path is faster.** The device path has a floor of about 3.1–3.6 ms at np2. At np4 the floor is 6.7 ms with recursive doubling (below 64 KiB) and 9.3–9.8 ms with ring.
+- **From 8 MiB up the device path is faster.** The full table shows the crossover between 4 and 8 MiB at both np2 and np4. Speedup at np2: 1.8× at 8 MiB, 2.5× at 16 MiB, 4.9–5.0× at 64–256 MiB. At np4: 1.3× at 8 MiB, 2.9× at 16 MiB, 4.3–4.7× at 64–256 MiB. At 64 MiB and above, busbw is 6.1–6.2 GB/s at np2 and 3.3–3.6 GB/s at np4.
+
+Time breakdown from Nsight Systems (`scripts/nsys_b.sh`, np2, 25 calls including warm-up, rank 0 / rank 1, ms per call = total ÷ 25). The NVTX ranges are CPU-side time. `ipc:copy` is `cudaMemcpyAsync` + `cudaStreamSynchronize` of one chunk. `reduce` is only the kernel launch; the kernel runs on the stream and its time lands in the next synchronize. Nsight Systems 2023.2 in WSL recorded no GPU kernel or memcpy trace ("does not contain CUDA kernel data"), so GPU-side time is not split out.
+
+| size | `hxccl:allreduce` | `ipc:copy` | `reduce` (launch) | `cudaMallocAsync` | rest (MPI READY/DONE wait and other) |
+|---:|---:|---:|---:|---:|---:|
+| 64 KiB | 4.09 / 4.06 | 1.74 / 1.15 | 0.05 / 0.05 | 0.80 / 0.77 | 1.50 / 2.09 |
+| 4 MiB | 4.09 / 4.11 | 1.00 / 2.00 | 0.04 / 0.03 | 0.75 / 0.75 | 2.31 / 1.33 |
+| 64 MiB | 12.24 / 12.23 | 5.77 / 5.24 | 0.05 / 0.04 | 0.81 / 0.81 | 5.60 / 6.13 |
+
+- **`cudaMallocAsync` costs a lot on every call.** It is called once per call (25 times in 25 calls), with a median of 0.31–0.37 ms. Why it does not reuse pool memory between calls is not confirmed: the pool's release threshold was not inspected.
+- **Each chunk copy is slow.** The median `ipc:copy` is 0.14–0.15 ms, even for a 32 KiB chunk. Median `cudaStreamSynchronize` is 0.13–0.15 ms. Why one synchronize takes that long on WSL2 is not confirmed.
+- **The "rest" column is not split further.** The MPI READY/DONE waits were not traced (`-t mpi` recorded only `MPI_Init`/`MPI_Finalize`), so how the remainder divides between waiting and other work is not confirmed.
+
+Reduction kernel (Nsight Compute 2026.3.1, `--clock-control none`, `k_reduce<float>`, 1<<20 elements, fp32 sum). Results are in `docs/results/2026-11-11_b_ncu_reduce.txt`.
+
+| collection | time | DRAM read + write | DRAM clock (measured) | throughput |
+|---|---:|---:|---:|---:|
+| metrics only (1 pass) | 31.5 µs | 8.39 + 3.76 MB | 6.79 GHz | 386 GB/s (86% of the 448 GB/s spec) |
+| SpeedOfLight section (several passes) | 299.1 µs | 8.39 + 3.78 MB | 0.81 GHz | 78.7% of peak at that clock |
+
+During the multi-pass SpeedOfLight replay the DRAM clock read 0.81 GHz (`dram__cycles_elapsed.avg.per_second`), so that row reflects a lowered memory clock. Why the memory clock dropped during the replay is not confirmed. The prod, max and min rows (28.7–29.2 µs, 386–392 GB/s) are in the same file.
+
+Usage limits (B):
+
+- Build with `-DHXCCL_CUDA=ON`. A call returns only after its device work finishes; it does not return early the way NCCL does.
+- All ranks must pass the same kind of buffer (host or device) to a collective. The first device call starts the device path with a collective step.
+- A group cannot mix host and device Send/Recv; GroupEnd returns `hxcclInvalidUsage`.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
