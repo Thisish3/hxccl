@@ -149,3 +149,19 @@ class MemOps {
 - 측정 표와 Nsight Systems 시간 구성이 있고, GPU 한 장이라는 한계를 문서에 적었다.
 - README 상태가 "A, A2 done"에서 "B, C done"으로 바뀌고, 사용법(빌드 옵션, 호출이 끝날 때 반환한다는 점)이 들어간다.
 - 끝난 뒤: 블로그 hxccl 개발 일지 #3(B)·#4(C), 이력서 hxccl 항목을 실제 결과로 수정.
+
+## 환경 기록 (B0, 2026-11-11, 데스크탑)
+
+| 항목 | 값 |
+|---|---|
+| GPU / 드라이버 | RTX 3060 Ti 8 GB (sm_86) / Windows 드라이버 581.80 |
+| OS | WSL2 Ubuntu 22.04 |
+| nvcc | 12.2 (V12.2.140, `/usr/local/cuda/bin/nvcc`) |
+| 호스트 컴파일러 | g++ 11.4.0 |
+| CMake | 3.22.1 |
+| OpenMPI | 4.1.2 (apt `libopenmpi-dev openmpi-bin`) |
+| PyTorch | 2.9.1+cu128 (`~/venvs/hxgemm`), NCCL 2.27.5 |
+
+- **CUDA IPC (`experimental/ipc_probe.cu`, `mpirun -np 2`)**: `ipc_probe: PASS (0 bad)`. WSL2에서 같은 GPU의 두 프로세스 사이에 `cudaIpcGetMemHandle`/`cudaIpcOpenMemHandle`이 동작한다. B 진행.
+- **PyTorch NCCL, 한 GPU에 rank 2개** (`experimental/torch_nccl_same_gpu.py`, `python -m torch.distributed.run --nproc-per-node 2`): 두 rank 모두 `DistBackendError ... ncclInvalidUsage ... Duplicate GPU detected : rank 0 and rank 1 both on CUDA device 1000`. NCCL은 한 GPU 여러 rank를 허용하지 않으므로 B5·C2 비교 대상에서 빼고 이 오류를 기록으로 남긴다.
+- **MPS**: WSL에 `nvidia-cuda-mps-control`이 없다(`command not found`). WSL2에서 MPS를 쓸 수 있는지는 원인 미확인(바이너리가 없다는 것까지만 확인). X 실험은 MPS 없이 진행한다.
