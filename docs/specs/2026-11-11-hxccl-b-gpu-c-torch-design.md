@@ -114,7 +114,7 @@ class MemOps {
 
 - AllReduce, 크기 4 KiB ~ 256 MiB(2배씩), rank 2·4, warm-up 5 + 측정 20회 중앙값. SM 클럭 1500 MHz 고정과 클럭 로그는 hxgemm과 같은 방식.
 - 비교: hxccl CPU 경로(MPI), hxccl GPU 경로(IPC), PyTorch `gloo`, PyTorch NCCL(한 GPU에 여러 rank가 허용될 때만, 아니면 오류 메시지를 기록).
-- Nsight Systems: NVTX 구간(`hxccl:<op>`, `ipc:copy`, `ipc:wait_ready`, `ipc:wait_done`, `reduce`)을 넣고 rank별로 `nsys profile`. 크기 3개(64 KiB, 4 MiB, 64 MiB)에서 시간 구성(복사·대기·리덕션)을 표로 남긴다.
+- Nsight Systems: NVTX 구간(`hxccl:<op>`, `ipc:copy`, `reduce`)을 넣고(대기 시간은 `hxccl:<op>`에서 나머지를 뺀 값으로 계산) rank별로 `nsys profile`. 크기 3개(64 KiB, 4 MiB, 64 MiB)에서 시간 구성(복사·대기·리덕션)을 표로 남긴다.
 - Nsight Compute: 리덕션 커널(float sum, 64 MiB)의 DRAM 처리량만.
 - 결과에 "같은 GPU 안의 복사"라는 한계를 같이 적는다.
 
