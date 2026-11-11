@@ -1,0 +1,59 @@
+== count=1048576 np=1 run=1
+rank 0/1 count=1048576: PASS (0 bad), kernel 0.641 ms, wall 1.207 ms
+exit=0
+== count=1048576 np=1 run=2
+rank 0/1 count=1048576: PASS (0 bad), kernel 0.661 ms, wall 1.211 ms
+exit=0
+== count=1048576 np=1 run=3
+rank 0/1 count=1048576: PASS (0 bad), kernel 0.802 ms, wall 1.379 ms
+exit=0
+== count=1048576 np=2 run=1
+rank 0/2 count=1048576: PASS (0 bad), kernel 38.281 ms, wall 39.090 ms
+rank 1/2 count=1048576: PASS (0 bad), kernel 39.205 ms, wall 39.733 ms
+  timeline rank 0: start +0.000 ms | s0 sent +0.729 seen +35.394 | s1 sent +36.882 seen +36.883
+  timeline rank 1: start +19.928 ms | s0 sent +20.658 seen +20.658 | s1 sent +22.154 seen +37.796
+exit=0
+== count=1048576 np=2 run=2
+rank 0/2 count=1048576: PASS (0 bad), kernel 39.730 ms, wall 40.535 ms
+rank 1/2 count=1048576: PASS (0 bad), kernel 40.672 ms, wall 41.187 ms
+  timeline rank 0: start +0.000 ms | s0 sent +0.728 seen +37.037 | s1 sent +38.537 seen +38.537
+  timeline rank 1: start +21.674 ms | s0 sent +22.404 seen +22.404 | s1 sent +23.898 seen +39.487
+exit=0
+== count=1048576 np=2 run=3
+rank 0/2 count=1048576: PASS (0 bad), kernel 40.444 ms, wall 41.096 ms
+rank 1/2 count=1048576: PASS (0 bad), kernel 39.522 ms, wall 43.282 ms
+  timeline rank 0: start +21.205 ms | s0 sent +21.932 seen +21.933 | s1 sent +23.421 seen +38.970
+  timeline rank 1: start +0.000 ms | s0 sent +0.734 seen +36.565 | s1 sent +38.062 seen +38.062
+exit=0
+== count=1048576 np=4 run=1
+rank 2/4 count=1048576: PASS (0 bad), kernel 193.205 ms, wall 194.094 ms
+rank 0/4 count=1048576: PASS (0 bad), kernel 194.271 ms, wall 194.880 ms
+rank 1/4 count=1048576: PASS (0 bad), kernel 194.765 ms, wall 195.417 ms
+rank 3/4 count=1048576: PASS (0 bad), kernel 195.287 ms, wall 195.952 ms
+  timeline rank 0: start +16.944 ms | s0 sent +17.315 seen +79.887 | s1 sent +80.452 seen +80.452 | s2 sent +81.014 seen +142.473 | s3 sent +143.289 seen +143.289 | s4 sent +143.837 seen +192.552 | s5 sent +193.103 seen +193.103
+  timeline rank 1: start +31.743 ms | s0 sent +32.110 seen +32.110 | s1 sent +32.675 seen +95.926 | s2 sent +96.492 seen +96.492 | s3 sent +97.057 seen +156.215 | s4 sent +156.766 seen +156.767 | s5 sent +157.317 seen +193.638
+  timeline rank 2: start +0.000 ms | s0 sent +0.365 seen +64.469 | s1 sent +65.036 seen +65.036 | s2 sent +65.602 seen +127.896 | s3 sent +128.451 seen +128.451 | s4 sent +129.004 seen +191.476 | s5 sent +192.026 seen +192.026
+  timeline rank 3: start +48.450 ms | s0 sent +48.817 seen +48.818 | s1 sent +49.379 seen +107.861 | s2 sent +108.427 seen +108.427 | s3 sent +108.987 seen +175.475 | s4 sent +176.024 seen +176.025 | s5 sent +176.571 seen +194.164
+exit=0
+== count=1048576 np=4 run=2
+exit=124
+== count=1048576 np=4 run=3
+exit=124
+== count=4096 np=1 run=1
+exit=124
+== count=4096 np=1 run=2
+exit=124
+== count=4096 np=1 run=3
+exit=124
+== count=4096 np=2 run=1
+exit=124
+== count=4096 np=2 run=2
+exit=124
+== count=4096 np=2 run=3
+exit=124
+== count=4096 np=4 run=1
+exit=124
+== count=4096 np=4 run=2
+exit=124
+== count=4096 np=4 run=3
+exit=124
