@@ -1,7 +1,7 @@
 # hxccl B + C: GPU 버퍼(CUDA IPC)와 PyTorch 백엔드
 
 - 작성일: 2026-11-11
-- 상태: 사용자 리뷰 대기
+- 상태: 구현 완료(브랜치 `b-gpu`, 2026-11-11). main 병합은 맥 Claude와 사용자 확인 후. 계획과 다른 결정은 `docs/LEDGER.md` R1~.
 - 선행: A(코어)·A2(CPU 쪽 NCCL/RCCL API 전체), main `9dbdb4b`.
 - 순서 변경: A2 스펙은 C → B 순서였다. 이번에는 사용자 합의(2026-11-11)로 **B와 C를 한 번에** 하고, GPU가 주도하는 방식은 실험(X)으로 둔다.
 

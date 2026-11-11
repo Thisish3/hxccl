@@ -2,7 +2,12 @@
 
 A small NCCL-style collective communication library, built step by step to understand how NCCL/RCCL work and to compare against them.
 
-> **Status: A (core) and A2 (full CPU-side NCCL/RCCL API) done.** CPU buffers over OpenMPI. GPU direct transport (B), PyTorch `ProcessGroup` backend (C) and the comparison with RCCL/NCCL on real multi-GPU hardware (D) are next. Not affiliated with NVIDIA NCCL, AMD RCCL or Huawei HCCL.
+> **Status: A (core), A2 (full CPU-side NCCL/RCCL API), B (GPU buffers over CUDA IPC) and C (PyTorch `torch.distributed` backend) done.**
+>
+> - **Coverage:** every collective plus Send/Recv and Group runs on host or device buffers, and device results match the CPU path bit for bit. `dist.init_process_group("hxccl")` works under `mpirun`. B and C were measured on one GPU only (see the B and C sections below).
+> - **Not done yet:** comparison with RCCL/NCCL on real multi-GPU hardware (D), a socket bootstrap so that `torchrun` works (E), calls that return before the work finishes, and running on HIP.
+>
+> Not affiliated with NVIDIA NCCL, AMD RCCL or Huawei HCCL.
 
 ## API
 
@@ -31,7 +36,8 @@ Behaviour worth knowing:
 
 - **Send/Recv outside a group block.** Two ranks that both Send then Recv a large message wait for each other forever, as in NCCL. Put them in a group.
 - **Avg follows NCCL** (`src/enqueue/enqueue.cc`): integers are summed, then divided by N (truncating toward zero). Floats are first multiplied by 1/N (rounded to the datatype), then summed. For example, two fp16 values of 60000 average to 60000, not to inf.
-- **fp8 overflow is undefined here.** e4m3 values beyond 448 become NaN and IEEE-style types become inf. NCCL's mode was not checked; B will compare the two on a GPU.
+- **fp8 overflow differs from CUDA's default conversion.** hxccl turns e4m3 values beyond 448 into NaN and e5m2 overflow into inf. CUDA's `__nv_fp8_*` constructors saturate to the largest finite value (KNOWN_ISSUES #4). The GPU path follows the CPU path.
+- **Device buffers (B) return when the work is done.** Pass device pointers with `-DHXCCL_CUDA=ON`; the call does not return early the way NCCL does. All ranks must pass the same kind of buffer (host or device) to a collective, and one group cannot mix host and device Send/Recv (`hxcclInvalidUsage`).
 - **AllToAllv does one extra `MPI_Allreduce`** before sending. Block sizes differ per rank, so ranks first agree on whether any argument is invalid, and then all of them reject together instead of leaving the others waiting. The agreement runs at call time, also inside a group.
 - **Known problems** are listed in [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md).
 - **Abort is local.** It frees hxccl's state without talking to peers and leaks the MPI communicator on purpose.
@@ -40,7 +46,7 @@ Moved to later stages, because they need GPU memory, streams, or a socket bootst
 
 | API | Stage |
 |---|---|
-| MemAlloc/Free, CommRegister, Window*, CommCuDevice, MemStats, InitAll, PutSignal/Signal/WaitSignal, non-blocking communicators, Suspend/Resume | B (GPU) |
+| MemAlloc/Free, CommRegister, Window*, CommCuDevice, MemStats, InitAll, PutSignal/Signal/WaitSignal, non-blocking communicators, Suspend/Resume | after B (the B goal, collectives on GPU buffers, did not need them) |
 | AllReduceWithBias (RCCL) | D (needs RCCL's actual output to pin the meaning of `acc`) |
 | CommGrow, InitRankScalable, CommGetUniqueId, Revoke, GroupSimulateEnd, Param*, per-collective `*Config`, SetEncryption, CommDump | E (bootstrap, tuner) |
 
@@ -58,9 +64,14 @@ algo_bcast.cc binomial tree < 512 KB, 512 KB-segment chain above
 algo_rooted.cc reduce (mirror of bcast), gather, scatter
 algo_alltoall.cc pairwise exchange: step s sends to r+s, receives from r−s
 transport_*   point-to-point layer; algorithms only see Transport (MPI_Sendrecv, Isend/Irecv)
+memops*.cc    MemOps: copy / reduce / scratch memory / transport for one memory space
+              (HostOps: memcpy + MPI; DeviceOps: cudaMemcpyAsync + reduction kernels + IPC)
+memspace*.cc  ops_for(): picks HostOps or DeviceOps per call from the buffer pointers
+transport_ipc.cc  IpcTransport: per-peer staging buffers over CUDA IPC, READY/DONE over MPI
+gpu_reduce.cu reduction kernels; elem.h holds the per-element rules shared with reduce.cc
 ```
 
-Algorithms never call MPI directly, so the GPU IPC transport in B can be dropped in without touching them.
+Algorithms never call MPI or CUDA directly: they get a `MemOps`. The same algorithm code runs on host and device buffers.
 
 ## Tests
 
@@ -69,6 +80,8 @@ Algorithms never call MPI directly, so the GPU IPC transport in B can be dropped
 - **Correctness against MPI:** every collective is compared bit-for-bit with `MPI_Allreduce` / `MPI_Allgather` / `MPI_Reduce_scatter_block` / `MPI_Bcast`, for counts {0, 1, 3, 7, 1000, 4099}. Inputs are exactly representable, so the order of reduction does not matter. The tests cover all ops and dtypes, the ring / rd / auto algorithms, in-place calls, and broadcast from root 0 and root N−1.
 - **Traffic:** the bytes and messages each rank sends must equal the schedule exactly. For ring this is the sum of the chunk sizes it forwards (2(N−1) messages). For rd it is log₂N messages × S when N is a power of two.
 - **Errors:** invalid arguments return `hxcclInvalidArgument` and send nothing. An MPI failure returns `hxcclSystemError` and the process stays alive, because the communicator uses `MPI_ERRORS_RETURN`.
+- **GPU (`-DHXCCL_CUDA=ON`):** 24 more runs (`gpu_reduce`, `gpu_allreduce`, `gpu_collectives`, `gpu_p2p` at N ∈ {1, 2, 4}, each also with `HXCCL_IPC_CHUNK=4096`). Every device result is compared bit for bit with the CPU path on the same input, and the traffic counters must match too. The reduction kernels are checked for all 12 dtypes × ops.
+- **PyTorch:** `mpirun -np {2,4} python -m pytest python/tests` compares the results with the `gloo` backend.
 
 ## Build
 
@@ -79,6 +92,15 @@ cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++   # Release by default
 cmake --build build && ctest --test-dir build
 mpirun --oversubscribe -np 4 build/hxccl_perf -b 256 -e 64M -f 4 -n 20
 ```
+
+GPU build (desktop: WSL2 Ubuntu 22.04, CUDA 12.2, OpenMPI 4.1.2 from apt, CMake ≥ 3.20):
+
+```bash
+cmake -S . -B build-cuda -DHXCCL_CUDA=ON && cmake --build build-cuda -j && ctest --test-dir build-cuda
+mpirun --oversubscribe -np 2 build-cuda/hxccl_perf -o allreduce -b 4K -e 256M -f 2 -n 20 -d   # -d: device buffers
+```
+
+`HXCCL_IPC_CHUNK` sets the IPC staging buffer size in bytes (default 4 MiB).
 
 ## Measurements (A: CPU, shared memory)
 

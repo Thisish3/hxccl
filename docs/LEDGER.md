@@ -29,3 +29,11 @@
 - **R24** (Task 7 Step 5) 테스트가 모두 통과했는데도 mpirun이 "exited without calling finalize"로 종료 코드 1을 냈다. `_C.finalize()`(MPI가 초기화됐고 아직 finalize하지 않았으면 `MPI_Finalize`)를 추가하고, `hxccl_torch` import 때 `atexit`에 등록했다. `HxcclBackend` 소멸자는 MPI가 이미 finalize됐으면 `hxcclCommDestroy`를 건너뛴다. 백엔드 생성 시 store에서 읽은 unique id 크기도 검사한다. `_allgather_base`/`_reduce_scatter_base`는 크기 관계(world_size배)를 검사해 `ValueError`를 낸다.
 - **R25** (Task 7) torch는 venv가 아니라 `~/.local/lib/python3.10/site-packages`(2.9.1+cu128)에 있다. `~/venvs/hxgemm/bin/python`이 이것을 import한다. 결과: `mpirun -np 2·4 ... pytest -q python/tests` 모두 37 passed, 3 skipped(gloo에 정수 AVG가 없어 계획대로 skip). 실패 테스트를 먼저 돌려 보는 단계는 따로 하지 않았다.
 - **R26** (Task 9) 실험 프로그램에 계획에 없던 `%globaltimer` 단계별 시각 기록을 넣었다. Nsight Systems가 WSL에서 GPU 트레이스를 남기지 않아서(R21), 두 프로세스의 커널이 동시에 도는지를 이것으로 대신 봤다. n=1에서는 inbox가 0바이트라 `cudaIpcGetMemHandle`이 invalid argument로 실패해서, 버퍼를 최소 1 덩어리로 잡게 고쳤다. 결과와 해석은 `experimental/README.md`에 있다. np4 두 번째 실행이 멈춘 뒤 GPU가 WSL·Windows 모두에서 응답하지 않았고(프로세스가 D 상태), 멈춘 **원인은 미확인**이다. `wsl --shutdown`은 자동 실행 권한이 거부되어 사용자에게 요청했다. 시간 상한(측정까지 하루) 안에서 X를 여기까지로 마친다.
+- **R27** (Task 10) 사용자가 `wsl --shutdown`을 한 뒤 GPU가 복구됐다(`nvidia-smi` 응답, `gpu_reduce` 통과). 이때 SM 클럭이 1680 MHz여서 `-lgc` 고정은 풀린 것으로 보이지만, Task 10에는 측정이 없다. 전체 테스트: CPU 빌드 78/78, CUDA 빌드 102/102, PyTorch np2·np4 각각 37 passed, 3 skipped.
+- **R28** (Task 10 Step 4) 브랜치 리뷰: 계획의 "superpowers 최종 리뷰 절차"가 없어서 `main..b-gpu`(42개 파일, +1647/−261)를 직접 다시 읽었다. 지적과 조치:
+  (1) CUDA 빌드에서 host 전용 호출도 CUDA 컨텍스트를 만든다. 측정 결과 rank당 약 115 MiB였다. 판정 방식을 바꿔야 고칠 수 있어 KNOWN_ISSUES #26에 기록만 했다.
+  (2) `IpcTransport::waitall`이 sleep 없이 polling한다. KNOWN_ISSUES #27에 기록했고 측정은 안 했다.
+  (3) 모든 rank가 같은 종류의 버퍼를 써야 하는데 이를 검사하지 않는다. KNOWN_ISSUES #18에 적었다.
+  (4) 비동기 반환, Group 혼합 거절, torchrun 미지원, 항상 완료된 Work를 KNOWN_ISSUES #16·#17·#19·#20에 추가하고, #4(fp8)는 Task 3 결과로 갱신돼 있다.
+  (5) 맥 CPU 빌드(`HXCCL_CUDA=OFF`, clang/libc++)는 이 데스크탑에서 확인할 수 없다. `fp.h`·`elem.h`가 `<math.h>`의 `isnan`/`ldexpf` 등을 한정자 없이 쓰므로 맥에서 빌드와 78개 테스트 확인이 필요하다(스펙 5 "CPU 빌드" 행).
+  그 밖의 코드 결함은 찾지 못했다.
