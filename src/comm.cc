@@ -14,6 +14,7 @@ hxcclResult_t make_comm(hxcclComm_t* out, MPI_Comm owned) {
   MPI_Comm_rank(owned, &c->rank);
   MPI_Comm_size(owned, &c->nranks);
   c->tr = std::make_unique<MpiTransport>(owned);
+  c->net = std::make_shared<MpiNet>(owned);
   c->host_ops = std::make_unique<HostOps>(c->tr);
   static int next_tag = 0;  // tags wrap after 32766 communicators; a collision needs that many
   next_tag = next_tag % 0x7ffe + 1;

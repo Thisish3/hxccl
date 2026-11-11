@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "hxccl.h"
+#include "net.h"
 
 // collectives and Send/Recv use separate tags so their messages never match each other
 constexpr int kCollTag = 0, kP2pTag = 1;
@@ -54,10 +55,10 @@ class MpiTransport : public Transport {
 
 // Device buffers over CUDA IPC (spec 3.4). Every rank keeps one staging buffer per sender;
 // data moves with cudaMemcpyAsync into the receiver's staging buffer and is handed over with
-// MPI READY/DONE messages. Every call finishes before it returns.
+// READY/DONE control messages on the communicator's Net. Every call finishes before it returns.
 class IpcTransport : public Transport {
  public:
-  IpcTransport(MPI_Comm comm, int rank, int n, size_t chunk);
+  IpcTransport(Net& net, size_t chunk);
   ~IpcTransport() override;
   hxcclResult_t init();  // collective over comm: allocate staging buffers, exchange handles
   void set_stream(cudaStream_t s) { stream_ = s; }
@@ -75,8 +76,8 @@ class IpcTransport : public Transport {
   hxcclResult_t progress(Op& o, bool* finished);
   hxcclResult_t progress_self();
   hxcclResult_t cuda(cudaError_t e, const char* what);
-  hxcclResult_t mpi(int rc, const char* what);
-  MPI_Comm comm_;
+  hxcclResult_t ctl(hxcclResult_t r, const char* what);
+  Net& net_;
   int rank_, n_;
   size_t chunk_;
   cudaStream_t stream_ = nullptr;

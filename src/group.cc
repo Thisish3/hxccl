@@ -30,7 +30,7 @@ bool is_host(const P2p& o) { return o.m == o.c->host_ops.get(); }
 
 // Post every send/recv before waiting on any, so pairs that send to each other finish.
 hxcclResult_t run_p2p(const std::vector<P2p>& ops) {
-  // The host transport blocks in MPI_Waitall while the device one polls, so a rank waiting
+  // The host transport blocks (MPI_Waitall) while the device one polls, so a rank waiting
   // on host traffic could stall a peer's device traffic. Mixing is rejected for now.
   const bool any_host = std::any_of(ops.begin(), ops.end(), is_host);
   const bool any_dev = !std::all_of(ops.begin(), ops.end(), is_host);

@@ -34,7 +34,7 @@ MemOps* ops_for(hxcclComm* c, hxcclStream_t stream, const void* a, const void* b
   }
   if (sa != 1 && sb != 1) return c->host_ops.get();
   if (!c->dev_ops) {
-    auto d = std::make_unique<DeviceOps>(c->mpi, c->rank, c->nranks, chunk_bytes());
+    auto d = std::make_unique<DeviceOps>(*c->net, chunk_bytes());
     if ((*rc = d->init()) != hxcclSuccess) {
       comm_fail(c, *rc, d->error);
       return nullptr;

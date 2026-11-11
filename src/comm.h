@@ -20,7 +20,8 @@ struct UserOp {
 struct hxcclComm {
   int rank = 0;
   int nranks = 1;
-  MPI_Comm mpi = MPI_COMM_NULL;
+  MPI_Comm mpi = MPI_COMM_NULL;  // MPI communicators only
+  std::shared_ptr<Net> net;       // control traffic (MpiNet or SockNet)
   std::unique_ptr<Transport> tr;
   std::unique_ptr<HostOps> host_ops;  // CPU buffers over `tr`; declared after it, freed first
   std::unique_ptr<MemOps> dev_ops;    // device buffers (HXCCL_CUDA), created on first use

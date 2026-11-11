@@ -11,17 +11,17 @@
 // sender over CUDA IPC. Per chunk: the receiver sends READY, the sender copies into the
 // staging buffer, synchronizes its stream and sends DONE, the receiver copies out.
 //
-// No deadlock: READY is a small eager MPI_Send, and a sender makes no blocking call before
-// its READY arrives. Ops to the same peer in the same direction advance one at a time from
-// the front of their deque, so the single staging buffer is reused in posting order.
+// No deadlock: READY is a small control message, and a sender makes no blocking call
+// before its READY arrives. Ops to the same peer in the same direction advance one at a time
+// from the front of their deque, so the single staging buffer is reused in posting order.
 //
 // Sizes travel with the control messages so a short receive behaves like MPI: READY carries
 // the receive size R, DONE carries the send size S and the chunk length. min(S, R) bytes
 // move; the receiver fails with "message truncated" when S > R. Zero-byte messages still
-// do one READY/DONE round, so message counts match the MPI transport.
+// do one READY/DONE round, so message counts match the host transport.
 //
-// Control messages use their own tags, so they never match user data that the MPI
-// transport of the same communicator sends.
+// Control messages go through the communicator's Net (MPI or sockets) with their own tags,
+// so they never match user data that the host transport of the same communicator sends.
 namespace {
 constexpr int kReadyBase = 1000, kDoneBase = 2000;
 }  // namespace
@@ -35,20 +35,20 @@ struct IpcTransport::Op {
   size_t off = 0;
   size_t total = SIZE_MAX;  // min(S, R), known after the first control message
   bool waiting = false;
-  MPI_Request req = MPI_REQUEST_NULL;
+  int req = -1;  // pending control receive on net_
   uint64_t ctrl_out[2] = {0, 0};
   uint64_t ctrl_in[2] = {0, 0};
 };
 
-IpcTransport::IpcTransport(MPI_Comm comm, int rank, int n, size_t chunk)
-    : comm_(comm),
-      rank_(rank),
-      n_(n),
+IpcTransport::IpcTransport(Net& net, size_t chunk)
+    : net_(net),
+      rank_(net.rank()),
+      n_(net.size()),
       chunk_(chunk),
-      mine_(n, nullptr),
-      peer_(n, nullptr),
-      sends_(n),
-      recvs_(n) {}
+      mine_(n_, nullptr),
+      peer_(n_, nullptr),
+      sends_(n_),
+      recvs_(n_) {}
 
 hxcclResult_t IpcTransport::init() {
   std::vector<cudaIpcMemHandle_t> mine_h(n_), all(size_t(n_) * n_);
@@ -59,11 +59,11 @@ hxcclResult_t IpcTransport::init() {
             cuda(cudaIpcGetMemHandle(&mine_h[s], mine_[s]), "cudaIpcGetMemHandle"))
       return r;
   }
-  const int hb = static_cast<int>(sizeof(cudaIpcMemHandle_t)) * n_;
-  if (hxcclResult_t r = mpi(MPI_Allgather(mine_h.data(), hb, MPI_BYTE, all.data(), hb,
-                                          MPI_BYTE, comm_),
-                            "MPI_Allgather ipc handles"))
+  if (hxcclResult_t r = net_.allgather(mine_h.data(), all.data(),
+                                       sizeof(cudaIpcMemHandle_t) * n_)) {
+    error = "allgather of ipc handles: " + net_.error;
     return r;
+  }
   for (int p = 0; p < n_; ++p) {
     if (p == rank_) continue;
     // all[p * n + rank_] is the buffer rank p keeps for data from me
@@ -95,18 +95,18 @@ hxcclResult_t IpcTransport::irecv(int from, void* buf, size_t bytes, int tag) {
 
 hxcclResult_t IpcTransport::progress(Op& o, bool* finished) {
   *finished = false;
-  int flag = 0;
+  bool arrived = false;
   hxcclResult_t r;
   if (o.is_send) {
     if (!o.waiting) {  // wait for READY {R}
-      if ((r = mpi(MPI_Irecv(o.ctrl_in, 1, MPI_UINT64_T, o.peer, kReadyBase + o.tag, comm_,
-                             &o.req),
-                   "MPI_Irecv ready")))
+      if ((r = ctl(net_.irecv(o.peer, kReadyBase + o.tag, o.ctrl_in, 8, &o.req), "recv ready")))
         return r;
       o.waiting = true;
     }
-    if ((r = mpi(MPI_Test(&o.req, &flag, MPI_STATUS_IGNORE), "MPI_Test ready"))) return r;
-    if (!flag) return hxcclSuccess;
+    r = ctl(net_.test(o.req, &arrived), "test ready");
+    if (arrived) o.req = -1;
+    if (r) return r;
+    if (!arrived) return hxcclSuccess;
     o.waiting = false;
     o.total = std::min<size_t>(o.bytes, o.ctrl_in[0]);
     const size_t len = std::min(chunk_, o.total - o.off);
@@ -121,9 +121,7 @@ hxcclResult_t IpcTransport::progress(Op& o, bool* finished) {
     }
     o.ctrl_out[0] = o.bytes;
     o.ctrl_out[1] = len;
-    if ((r = mpi(MPI_Send(o.ctrl_out, 2, MPI_UINT64_T, o.peer, kDoneBase + o.tag, comm_),
-                 "MPI_Send done")))
-      return r;
+    if ((r = ctl(net_.send(o.peer, kDoneBase + o.tag, o.ctrl_out, 16), "send done"))) return r;
     o.off += len;
     if (o.off >= o.total) {
       *finished = true;
@@ -134,17 +132,15 @@ hxcclResult_t IpcTransport::progress(Op& o, bool* finished) {
   }
   if (!o.waiting) {  // announce the free buffer, then wait for DONE {S, len}
     o.ctrl_out[0] = o.bytes;
-    if ((r = mpi(MPI_Send(o.ctrl_out, 1, MPI_UINT64_T, o.peer, kReadyBase + o.tag, comm_),
-                 "MPI_Send ready")))
-      return r;
-    if ((r = mpi(MPI_Irecv(o.ctrl_in, 2, MPI_UINT64_T, o.peer, kDoneBase + o.tag, comm_,
-                           &o.req),
-                 "MPI_Irecv done")))
+    if ((r = ctl(net_.send(o.peer, kReadyBase + o.tag, o.ctrl_out, 8), "send ready"))) return r;
+    if ((r = ctl(net_.irecv(o.peer, kDoneBase + o.tag, o.ctrl_in, 16, &o.req), "recv done")))
       return r;
     o.waiting = true;
   }
-  if ((r = mpi(MPI_Test(&o.req, &flag, MPI_STATUS_IGNORE), "MPI_Test done"))) return r;
-  if (!flag) return hxcclSuccess;
+  r = ctl(net_.test(o.req, &arrived), "test done");
+  if (arrived) o.req = -1;
+  if (r) return r;
+  if (!arrived) return hxcclSuccess;
   o.waiting = false;
   const size_t sbytes = o.ctrl_in[0], len = o.ctrl_in[1];
   o.total = std::min(sbytes, o.bytes);
@@ -197,16 +193,12 @@ hxcclResult_t IpcTransport::waitall() {
   for (;;) {
     bool any = false;
     if (!sends_[rank_].empty() || !recvs_[rank_].empty()) {
-      const bool can = !sends_[rank_].empty() && !recvs_[rank_].empty();
-      if (can) {
-        any = true;
+      any = true;  // an unmatched self op waits forever, as MPI would
+      if (!sends_[rank_].empty() && !recvs_[rank_].empty())
         if (hxcclResult_t r = progress_self()) {
           cancel_all();
           return r;
         }
-      } else {
-        any = true;  // an unmatched self op waits forever, as MPI would
-      }
     }
     for (int p = 0; p < n_; ++p) {
       if (p == rank_) continue;
@@ -246,10 +238,7 @@ void IpcTransport::cancel_all() {
   for (auto* qs : {&sends_, &recvs_})
     for (auto& q : *qs) {
       for (Op& o : q)
-        if (o.req != MPI_REQUEST_NULL) {
-          MPI_Cancel(&o.req);
-          MPI_Request_free(&o.req);
-        }
+        if (o.req >= 0) net_.cancel(o.req);
       q.clear();
     }
 }
@@ -259,11 +248,7 @@ hxcclResult_t IpcTransport::cuda(cudaError_t e, const char* what) {
   error = std::string(what) + ": " + cudaGetErrorString(e);
   return hxcclUnhandledCudaError;
 }
-hxcclResult_t IpcTransport::mpi(int rc, const char* what) {
-  if (rc == MPI_SUCCESS) return hxcclSuccess;
-  char msg[MPI_MAX_ERROR_STRING];
-  int len = 0;
-  MPI_Error_string(rc, msg, &len);
-  error = std::string(what) + ": " + std::string(msg, len);
-  return hxcclSystemError;
+hxcclResult_t IpcTransport::ctl(hxcclResult_t r, const char* what) {
+  if (r != hxcclSuccess) error = std::string("ipc control ") + what + ": " + net_.error;
+  return r;
 }

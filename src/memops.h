@@ -70,7 +70,7 @@ class HostOps : public MemOps {
 // Device buffers: work is queued on the caller's stream; sync() waits for it.
 class DeviceOps : public MemOps {
  public:
-  DeviceOps(MPI_Comm comm, int rank, int n, size_t chunk);
+  DeviceOps(Net& net, size_t chunk);
   ~DeviceOps() override;
   hxcclResult_t init();  // collective over comm: allocate and exchange
   void set_stream(cudaStream_t s);

@@ -43,3 +43,7 @@
   - 그래서 라이브러리 변경(driver API 확인, libcuda 링크)은 되돌렸다. 회귀 테스트 `tests/gpu_host_no_context.cc`를 추가했고, 이 테스트만 `CUDA::cuda_driver`를 링크한다. host 구간에 `cudaFree(0)`를 넣으면 이 테스트가 실패하는 것도 확인했다.
   - 결과: CUDA 빌드 108/108, CPU 빌드 78/78.
   - 측정 영향: B·Task 6의 host 경로 측정은 rank마다 CUDA 컨텍스트가 있는 상태에서 잰 것이다. 시간에 영향이 있었는지는 확인하지 않았다.
+
+## E (소켓 부트스트랩, 브랜치 `e-socket`)
+
+- **E1** (Task E0) 스펙·계획은 데스크탑에서 사용자 요청("torchrun 지원 먼저")으로 썼다. 맥 Claude가 리뷰하지 않았다. `Net`/`MpiNet`을 추가하고 IPC 제어 메시지와 AllToAllv 합의를 그쪽으로 옮겼다. 동작은 바뀌지 않았다(CPU 78/78, CUDA 108/108 통과).

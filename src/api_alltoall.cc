@@ -71,8 +71,9 @@ hxcclResult_t hxcclAllToAllv(const void* send, const size_t sc[], const size_t s
   const size_t es = dtype_size(dt);
   int status = local_v_status(c, send, sc, sd, recv, rc, rd, es);
   // runs at call time, even inside a group (see docs/KNOWN_ISSUES.md)
-  if (MPI_Allreduce(MPI_IN_PLACE, &status, 1, MPI_INT, MPI_MAX, c->mpi) != MPI_SUCCESS)
-    return comm_fail(c, hxcclSystemError, "MPI_Allreduce for the AllToAllv argument check failed");
+  if (c->net->allreduce_max(&status) != hxcclSuccess)
+    return comm_fail(c, hxcclSystemError,
+                     "the AllToAllv argument check failed: " + c->net->error);
   if (status == 1)
     return comm_fail(c, hxcclInvalidArgument, "invalid AllToAllv arguments on some rank");
   if (status == 2)

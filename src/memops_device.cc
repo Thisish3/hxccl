@@ -10,8 +10,8 @@
 // Reductions run on the same stream as the IPC copies, so received data is reduced in
 // order without extra synchronization. Each API call ends with sync().
 
-DeviceOps::DeviceOps(MPI_Comm comm, int rank, int n, size_t chunk)
-    : ipc_(std::make_unique<IpcTransport>(comm, rank, n, chunk)) {}
+DeviceOps::DeviceOps(Net& net, size_t chunk)
+    : ipc_(std::make_unique<IpcTransport>(net, chunk)) {}
 DeviceOps::~DeviceOps() = default;
 
 hxcclResult_t DeviceOps::init() {
