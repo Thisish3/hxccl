@@ -4,3 +4,8 @@ build/
 build-cuda/
 *.nsys-rep
 *.sqlite
+python/build/
+*.so
+*.egg-info/
+__pycache__/
+.pytest_cache/

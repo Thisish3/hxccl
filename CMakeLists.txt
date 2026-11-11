@@ -29,6 +29,8 @@ else()
   list(FILTER HXCCL_SRC EXCLUDE REGEX "(memops_device|transport_ipc|memspace_cuda)\\.cc$")
 endif()
 add_library(hxccl STATIC ${HXCCL_SRC})
+# the PyTorch extension (python/) links libhxccl.a into a shared object
+set_target_properties(hxccl PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(hxccl PUBLIC include PRIVATE src)
 target_link_libraries(hxccl PUBLIC MPI::MPI_CXX)
 if(HXCCL_CUDA)
