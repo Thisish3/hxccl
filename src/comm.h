@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "hxccl.h"
+#include "memops.h"
 #include "transport.h"
 
 // A PreMulSum op made by hxcclRedOpCreatePreMulSum.
@@ -19,11 +20,17 @@ struct UserOp {
 struct hxcclComm {
   int rank = 0;
   int nranks = 1;
-  MPI_Comm mpi = MPI_COMM_NULL;
+  MPI_Comm mpi = MPI_COMM_NULL;  // MPI communicators only
+  std::shared_ptr<Net> net;       // control traffic (MpiNet or SockNet)
   std::unique_ptr<Transport> tr;
+  std::unique_ptr<HostOps> host_ops;  // CPU buffers over `tr`; declared after it, freed first
+  std::unique_ptr<MemOps> dev_ops;    // device buffers (HXCCL_CUDA)
+  hxcclResult_t dev_error = hxcclSuccess;  // sticky failure of the device path
+  std::string dev_error_msg;
   std::string last_error;
   std::vector<UserOp> user_ops;
   int op_tag = 0;  // 1..0x7ffe, assigned per communicator in this process
+  uint64_t derived = 0;  // Split/Shrink calls so far: part of a socket child's comm id
   bool finalized = false;
   hxcclResult_t async_error = hxcclSuccess;  // last transport-level failure
 };

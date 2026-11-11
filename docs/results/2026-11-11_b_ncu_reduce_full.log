@@ -1,0 +1,5 @@
+==WARNING== Note: Running with unmodified GPU clocks. If not controlled otherwise, profiling results may be inconsistent.
+==PROF== Connected to process 546 (/home/a/hxccl/build-cuda/gpu_reduce)
+==PROF== Profiling "void <unnamed>::k_reduce<float>(T1 *, const T1 *, unsigned long, hxcclRedOp_t)": 0%....50%....100% - 45 passes
+==PROF== Disconnected from process 546
+==PROF== Report: /home/a/hxccl/docs/results/2026-11-11_b_ncu_reduce_full.ncu-repz

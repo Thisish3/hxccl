@@ -63,11 +63,14 @@ int main(int argc, char** argv) {
   CHECK(!tr.error.empty());
   MPI_Comm_free(&dup);
 
-  // the communicator itself returns MPI errors instead of aborting
-  MPI_Errhandler eh;
-  MPI_Comm_get_errhandler(c->mpi, &eh);
-  CHECK(eh == MPI_ERRORS_RETURN);
-  MPI_Errhandler_free(&eh);
+  // the communicator itself returns MPI errors instead of aborting (MPI communicators only;
+  // a socket communicator from HXCCL_BOOTSTRAP=socket has no MPI handle)
+  if (c->mpi != MPI_COMM_NULL) {
+    MPI_Errhandler eh;
+    MPI_Comm_get_errhandler(c->mpi, &eh);
+    CHECK(eh == MPI_ERRORS_RETURN);
+    MPI_Errhandler_free(&eh);
+  }
 
   // a transport failure surfaces through the public API with its message
   if (n > 1) {
@@ -100,7 +103,8 @@ int main(int argc, char** argv) {
     CHECK(b2 == 0 && m2 == 0);
   }
 
-  // InitRank checks that the given rank is the rank the caller really gets
+  // InitRank rejects ranks that disagree: with the socket bootstrap (E) a repeated rank
+  // cannot form a communicator, so every rank gets InvalidUsage
   if (n > 1) {
     int wr;
     MPI_Comm_rank(MPI_COMM_WORLD, &wr);
@@ -109,7 +113,7 @@ int main(int argc, char** argv) {
     MPI_Bcast(&id, sizeof id, MPI_BYTE, 0, MPI_COMM_WORLD);
     hxcclComm_t w = nullptr;
     hxcclResult_t r = hxcclCommInitRank(&w, n, id, 0);  // everyone claims rank 0
-    CHECK(wr == 0 ? r == hxcclSuccess : r == hxcclInvalidUsage);
+    CHECK(r == hxcclInvalidUsage);
     if (r == hxcclSuccess) hxcclCommDestroy(w);
   }
 

@@ -1,8 +1,8 @@
 #pragma once
 #include <cstddef>
-#include <vector>
 
 #include "comm.h"
+#include "memops.h"
 
 // Shared front-end checks; nothing is sent when they fail.
 hxcclResult_t check_args(hxcclComm* c, const void* send, const void* recv, size_t count,
@@ -19,7 +19,15 @@ struct OpPlan {
   bool postdiv = false;  // integer Avg: divide the result by `divisor`
   int divisor = 1;
 };
-hxcclResult_t plan_op(hxcclComm* c, hxcclRedOp_t op, hxcclDataType_t dt, OpPlan* p);
-const void* premul_input(const OpPlan& p, const void* send, size_t count, hxcclDataType_t dt,
-                         std::vector<char>& tmp);
-void finish_op(const OpPlan& p, void* buf, size_t count, hxcclDataType_t dt);
+// `stream`: a PreMulSum scalar in device memory (hxcclScalarDevice) is read on it at call time.
+hxcclResult_t plan_op(hxcclComm* c, hxcclRedOp_t op, hxcclDataType_t dt, OpPlan* p,
+                      hxcclStream_t stream);
+// Returns the buffer the algorithm should read: `send`, or `tmp` holding send * scalar.
+// `tmp` must hold count elements when p.premul.
+const void* premul_input(MemOps& m, const OpPlan& p, const void* send, size_t count,
+                         hxcclDataType_t dt, Scratch& tmp, hxcclResult_t* rc);
+hxcclResult_t finish_op(MemOps& m, const OpPlan& p, void* buf, size_t count,
+                        hxcclDataType_t dt);
+
+// Records a failure of `m` (its own error, else its transport's) on the communicator.
+hxcclResult_t ops_fail(hxcclComm* c, MemOps& m, hxcclResult_t r);

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "memspace.h"
 #include "reduce.h"
 
 hxcclResult_t check_args(hxcclComm* c, const void* send, const void* recv, size_t count,
@@ -25,7 +26,8 @@ hxcclResult_t check_message(hxcclComm* c, size_t largest_bytes) {
                    "a single message would exceed INT_MAX bytes (MPI transport limit)");
 }
 
-hxcclResult_t plan_op(hxcclComm* c, hxcclRedOp_t op, hxcclDataType_t dt, OpPlan* p) {
+hxcclResult_t plan_op(hxcclComm* c, hxcclRedOp_t op, hxcclDataType_t dt, OpPlan* p,
+                      hxcclStream_t stream) {
   *p = OpPlan{};
   if (valid_op(op)) {
     p->base = op;
@@ -47,18 +49,35 @@ hxcclResult_t plan_op(hxcclComm* c, hxcclRedOp_t op, hxcclDataType_t dt, OpPlan*
   if (u.dt != dt)
     return comm_fail(c, hxcclInvalidArgument, "PreMulSum op was created for another datatype");
   p->premul = true;
-  std::memcpy(p->scalar, u.by_ptr ? u.ptr : u.value, dtype_size(dt));
+  if (!u.by_ptr) {
+    std::memcpy(p->scalar, u.value, dtype_size(dt));
+    return hxcclSuccess;
+  }
+  // hxcclScalarDevice: the pointer may be device memory (I3); read it now, after the work
+  // already queued on the caller's stream
+  std::string err;
+  if (hxcclResult_t r = read_scalar(p->scalar, u.ptr, dtype_size(dt), stream, &err))
+    return comm_fail(c, r, "reading the PreMulSum scalar: " + err);
   return hxcclSuccess;
 }
 
-const void* premul_input(const OpPlan& p, const void* send, size_t count, hxcclDataType_t dt,
-                         std::vector<char>& tmp) {
+const void* premul_input(MemOps& m, const OpPlan& p, const void* send, size_t count,
+                         hxcclDataType_t dt, Scratch& tmp, hxcclResult_t* rc) {
+  *rc = hxcclSuccess;
   if (!p.premul || count == 0) return send;
-  tmp.resize(count * dtype_size(dt));
-  scale_into(tmp.data(), send, count, dt, p.scalar);
-  return tmp.data();
+  if ((*rc = tmp.rc) != hxcclSuccess) return nullptr;
+  *rc = m.scale(tmp.get(), send, count, dt, p.scalar);
+  return tmp.get();
 }
 
-void finish_op(const OpPlan& p, void* buf, size_t count, hxcclDataType_t dt) {
-  if (p.postdiv && count) divide_trunc(buf, count, dt, p.divisor);
+hxcclResult_t finish_op(MemOps& m, const OpPlan& p, void* buf, size_t count,
+                        hxcclDataType_t dt) {
+  return p.postdiv && count ? m.divide_trunc(buf, count, dt, p.divisor) : hxcclSuccess;
+}
+
+hxcclResult_t ops_fail(hxcclComm* c, MemOps& m, hxcclResult_t r) {
+  if (r == hxcclSuccess) return r;
+  std::string msg = m.error.empty() ? m.tr().error : m.error;
+  m.error.clear();
+  return comm_fail(c, r, msg);
 }

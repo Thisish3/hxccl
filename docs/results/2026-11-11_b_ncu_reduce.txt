@@ -1,0 +1,14 @@
+# ncu 2026.3.1 --clock-control none (SM locked at 1500 MHz with nvidia-smi -lgc), SpeedOfLight section + metrics
+# k_reduce<float>, 1<<20 elements (grid 4096 x 256), in tests/gpu_reduce order: sum, prod, max, min
+op,gpu__time_duration.sum,dram__bytes_read.sum,dram__bytes_write.sum,gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed,dram__cycles_elapsed.avg.per_second,gpc__cycles_elapsed.avg.per_second
+sum,299104,8392832,3775360,78.67,807959773.19,1499612175.03
+prod,300448,8417536,3749248,78.33,807753754.39,1499634545.75
+max,299264,8392960,3769344,78.59,807955517.54,1499653149.06
+min,452960,14834944,3775232,79.43,808194984.10,1499837513.25
+
+# second run: metrics only (no section), same kernels; DRAM clock stays at its normal rate here
+op,time_ns,dram_read_B,dram_write_B,dram_cycles_per_s,gpc_cycles_per_s,GB_per_s
+sum,31456,8393216,3756800,6787385554.43,1460548067.14,386.3
+prod,29216,8393216,2888192,6782037239.87,1452881982.48,386.1
+max,28704,8395264,2867584,6782608695.65,1454605629.88,392.4
+min,29120,8393088,2879488,6782417582.42,1452197802.20,387.1
