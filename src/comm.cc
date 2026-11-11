@@ -14,6 +14,7 @@ hxcclResult_t make_comm(hxcclComm_t* out, MPI_Comm owned) {
   MPI_Comm_rank(owned, &c->rank);
   MPI_Comm_size(owned, &c->nranks);
   c->tr = std::make_unique<MpiTransport>(owned);
+  c->host_ops = std::make_unique<HostOps>(c->tr);
   static int next_tag = 0;  // tags wrap after 32766 communicators; a collision needs that many
   next_tag = next_tag % 0x7ffe + 1;
   c->op_tag = next_tag;
@@ -142,6 +143,7 @@ hxcclResult_t hxcclCommShrink(hxcclComm_t comm, int* excl, int nexcl, hxcclComm_
 hxcclResult_t hxcclCommAbort(hxcclComm_t comm) {
   if (!comm) return hxcclInvalidArgument;
   // local teardown only: MPI_Comm_free may need peers, so the MPI handle is leaked on purpose
+  comm->host_ops.reset();
   comm->tr.reset();
   delete comm;
   return hxcclSuccess;
@@ -161,6 +163,7 @@ hxcclResult_t hxcclCommGetAsyncError(hxcclComm_t comm, hxcclResult_t* err) {
 
 hxcclResult_t hxcclCommDestroy(hxcclComm_t comm) {
   if (!comm) return hxcclInvalidArgument;
+  comm->host_ops.reset();
   comm->tr.reset();
   if (comm->mpi != MPI_COMM_NULL) MPI_Comm_free(&comm->mpi);
   delete comm;

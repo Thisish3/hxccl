@@ -8,6 +8,7 @@ namespace {
 
 struct P2p {
   hxcclComm* c;
+  Transport* tr;  // the transport for this buffer's memory space
   bool send;
   int peer;
   void* buf;
@@ -23,21 +24,21 @@ thread_local Group g;
 
 // Post every send/recv before waiting on any, so pairs that send to each other finish.
 hxcclResult_t run_p2p(const std::vector<P2p>& ops) {
-  std::vector<hxcclComm*> comms;
+  std::vector<std::pair<hxcclComm*, Transport*>> used;  // one entry per distinct transport
   for (const P2p& o : ops) {
-    if (std::find(comms.begin(), comms.end(), o.c) == comms.end()) comms.push_back(o.c);
-    Transport& tr = *o.c->tr;
-    hxcclResult_t r = o.send ? tr.isend(o.peer, o.buf, o.bytes, kP2pTag)
-                             : tr.irecv(o.peer, o.buf, o.bytes, kP2pTag);
+    if (std::none_of(used.begin(), used.end(), [&](const auto& u) { return u.second == o.tr; }))
+      used.emplace_back(o.c, o.tr);
+    hxcclResult_t r = o.send ? o.tr->isend(o.peer, o.buf, o.bytes, kP2pTag)
+                             : o.tr->irecv(o.peer, o.buf, o.bytes, kP2pTag);
     if (r != hxcclSuccess) {
-      for (hxcclComm* c : comms) c->tr->cancel_all();
-      return comm_fail(o.c, r, tr.error);
+      for (const auto& u : used) u.second->cancel_all();
+      return comm_fail(o.c, r, o.tr->error);
     }
   }
   hxcclResult_t first = hxcclSuccess;
-  for (hxcclComm* c : comms) {
-    hxcclResult_t r = c->tr->waitall();
-    if (r != hxcclSuccess && first == hxcclSuccess) first = comm_fail(c, r, c->tr->error);
+  for (const auto& u : used) {
+    hxcclResult_t r = u.second->waitall();
+    if (r != hxcclSuccess && first == hxcclSuccess) first = comm_fail(u.first, r, u.second->error);
   }
   return first;
 }
@@ -51,7 +52,7 @@ hxcclResult_t dispatch(hxcclComm* c, std::function<hxcclResult_t()> run) {
 }
 
 hxcclResult_t p2p(hxcclComm* c, bool is_send, int peer, void* buf, size_t bytes) {
-  P2p op{c, is_send, peer, buf, bytes};
+  P2p op{c, &c->host_ops->tr(), is_send, peer, buf, bytes};
   if (g.depth == 0) return run_p2p({op});
   g.p2p.push_back(op);
   return hxcclSuccess;

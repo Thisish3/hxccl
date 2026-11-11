@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "algo.h"
+#include "checks.h"
 #include "reduce.h"
 
 Algo choose_allreduce(size_t bytes) {
@@ -16,8 +17,9 @@ Algo choose_allreduce(size_t bytes) {
 
 hxcclResult_t allreduce_with(hxcclComm* c, Algo algo, const void* send, void* recv,
                              size_t count, hxcclDataType_t dt, hxcclRedOp_t op) {
+  MemOps& m = *c->host_ops;
   hxcclResult_t r = algo == Algo::Ring
-                        ? ring_allreduce(*c->tr, c->rank, c->nranks, send, recv, count, dt, op)
-                        : rd_allreduce(*c->tr, c->rank, c->nranks, send, recv, count, dt, op);
-  return r == hxcclSuccess ? r : comm_fail(c, r, c->tr->error);
+                        ? ring_allreduce(m, c->rank, c->nranks, send, recv, count, dt, op)
+                        : rd_allreduce(m, c->rank, c->nranks, send, recv, count, dt, op);
+  return ops_fail(c, m, r);
 }

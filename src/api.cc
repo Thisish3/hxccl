@@ -22,11 +22,13 @@ hxcclResult_t hxcclAllReduce(const void* send, void* recv, size_t count, hxcclDa
       algo == Algo::Ring ? chunk_of(count, c->nranks, 0).len * es : count * es;
   if (hxcclResult_t r = check_message(c, largest)) return r;
   return dispatch(c, [=] {
-    std::vector<char> tmp;
-    const void* in = premul_input(p, send, count, dt, tmp);
-    hxcclResult_t r = allreduce_with(c, algo, in, recv, count, dt, p.base);
-    if (r == hxcclSuccess) finish_op(p, recv, count, dt);
-    return r;
+    MemOps& m = *c->host_ops;
+    Scratch tmp(m, p.premul ? count * es : 0);
+    hxcclResult_t r;
+    const void* in = premul_input(m, p, send, count, dt, tmp, &r);
+    if (r != hxcclSuccess) return ops_fail(c, m, r);
+    if ((r = allreduce_with(c, algo, in, recv, count, dt, p.base)) != hxcclSuccess) return r;
+    return ops_fail(c, m, finish_op(m, p, recv, count, dt));
   });
 }
 hxcclResult_t hxcclAllGather(const void* send, void* recv, size_t sendcount,
@@ -34,9 +36,9 @@ hxcclResult_t hxcclAllGather(const void* send, void* recv, size_t sendcount,
   if (hxcclResult_t r = check_args(c, send, recv, sendcount, c ? c->nranks : 1, dt)) return r;
   if (hxcclResult_t r = check_message(c, sendcount * dtype_size(dt))) return r;
   return dispatch(c, [=] {
-    hxcclResult_t r =
-        ring_allgather(*c->tr, c->rank, c->nranks, send, recv, sendcount, dtype_size(dt));
-    return r == hxcclSuccess ? r : comm_fail(c, r, c->tr->error);
+    MemOps& m = *c->host_ops;
+    return ops_fail(
+        c, m, ring_allgather(m, c->rank, c->nranks, send, recv, sendcount, dtype_size(dt)));
   });
 }
 hxcclResult_t hxcclReduceScatter(const void* send, void* recv, size_t recvcount,
@@ -47,13 +49,15 @@ hxcclResult_t hxcclReduceScatter(const void* send, void* recv, size_t recvcount,
   if (hxcclResult_t r = plan_op(c, op, dt, &p)) return r;
   if (hxcclResult_t r = check_message(c, recvcount * dtype_size(dt))) return r;
   return dispatch(c, [=] {
-    std::vector<char> tmp;
-    const void* in = premul_input(p, send, recvcount * c->nranks, dt, tmp);
-    hxcclResult_t r =
-        ring_reducescatter(*c->tr, c->rank, c->nranks, in, recv, recvcount, dt, p.base);
-    if (r != hxcclSuccess) return comm_fail(c, r, c->tr->error);
-    finish_op(p, recv, recvcount, dt);
-    return r;
+    MemOps& m = *c->host_ops;
+    const size_t total = recvcount * c->nranks;
+    Scratch tmp(m, p.premul ? total * dtype_size(dt) : 0);
+    hxcclResult_t r;
+    const void* in = premul_input(m, p, send, total, dt, tmp, &r);
+    if (r != hxcclSuccess) return ops_fail(c, m, r);
+    r = ring_reducescatter(m, c->rank, c->nranks, in, recv, recvcount, dt, p.base);
+    if (r != hxcclSuccess) return ops_fail(c, m, r);
+    return ops_fail(c, m, finish_op(m, p, recv, recvcount, dt));
   });
 }
 
@@ -64,9 +68,9 @@ hxcclResult_t hxcclBroadcast(const void* send, void* recv, size_t count, hxcclDa
   if (root < 0 || root >= c->nranks)
     return comm_fail(c, hxcclInvalidArgument, "root out of range");
   return dispatch(c, [=] {
-    hxcclResult_t r =
-        bcast(*c->tr, c->rank, c->nranks, send, recv, count * dtype_size(dt), root);
-    return r == hxcclSuccess ? r : comm_fail(c, r, c->tr->error);
+    MemOps& m = *c->host_ops;
+    return ops_fail(c, m,
+                    bcast(m, c->rank, c->nranks, send, recv, count * dtype_size(dt), root));
   });
 }
 

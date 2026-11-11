@@ -1,16 +1,16 @@
 #include <algorithm>
-#include <cstring>
 
 #include "algo.h"
 
-hxcclResult_t bcast(Transport& tr, int rank, int n, const void* send, void* recv,
-                    size_t bytes, int root) {
+hxcclResult_t bcast(MemOps& m, int rank, int n, const void* send, void* recv, size_t bytes,
+                    int root) {
   char* buf = static_cast<char*>(recv);
-  if (rank == root && send != recv) std::memcpy(buf, send, bytes);
+  hxcclResult_t r;
+  if (rank == root && send != recv && (r = m.copy(buf, send, bytes)) != hxcclSuccess) return r;
   if (n == 1 || bytes == 0) return hxcclSuccess;
   const int v = (rank - root + n) % n;  // position relative to root
   auto real = [=](int x) { return (x + root) % n; };
-  hxcclResult_t r;
+  Transport& tr = m.tr();
 
   if (bytes < kChainMinBytes) {
     int mask = 1;

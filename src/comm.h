@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "hxccl.h"
+#include "memops.h"
 #include "transport.h"
 
 // A PreMulSum op made by hxcclRedOpCreatePreMulSum.
@@ -21,6 +22,7 @@ struct hxcclComm {
   int nranks = 1;
   MPI_Comm mpi = MPI_COMM_NULL;
   std::unique_ptr<Transport> tr;
+  std::unique_ptr<HostOps> host_ops;  // CPU buffers over `tr`; declared after it, freed first
   std::string last_error;
   std::vector<UserOp> user_ops;
   int op_tag = 0;  // 1..0x7ffe, assigned per communicator in this process

@@ -10,10 +10,6 @@
 #include "reduce.h"
 
 namespace {
-hxcclResult_t fail_if(hxcclComm* c, hxcclResult_t r) {
-  return r == hxcclSuccess ? r : comm_fail(c, r, c->tr->error);
-}
-
 // 0 ok, 1 invalid argument, 2 a block exceeds INT_MAX bytes
 int local_v_status(const hxcclComm* c, const void* send, const size_t* sc, const size_t* sd,
                    const void* recv, const size_t* rc, const size_t* rd, size_t es) {
@@ -43,14 +39,17 @@ size_t extent(const std::vector<size_t>& bytes, const std::vector<size_t>& off) 
 hxcclResult_t run_alltoallv(hxcclComm* c, const char* send, const std::vector<size_t>& sb,
                             const std::vector<size_t>& so, char* recv,
                             const std::vector<size_t>& rb, const std::vector<size_t>& ro) {
+  MemOps& m = *c->host_ops;
   const size_t send_end = extent(sb, so), recv_end = extent(rb, ro);
-  std::vector<char> stage;
-  if (send_end && recv_end && send < recv + recv_end && recv < send + send_end) {
-    stage.assign(send, send + send_end);
-    send = stage.data();
+  const bool overlap = send_end && recv_end && send < recv + recv_end && recv < send + send_end;
+  Scratch stage(m, overlap ? send_end : 0);
+  if (stage.rc) return ops_fail(c, m, stage.rc);
+  if (overlap) {
+    if (hxcclResult_t r = m.copy(stage.get(), send, send_end)) return ops_fail(c, m, r);
+    send = stage.get();
   }
-  return fail_if(c, alltoallv(*c->tr, c->rank, c->nranks, send, sb.data(), so.data(), recv,
-                              rb.data(), ro.data()));
+  return ops_fail(c, m, alltoallv(m, c->rank, c->nranks, send, sb.data(), so.data(), recv,
+                                  rb.data(), ro.data()));
 }
 }  // namespace
 
