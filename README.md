@@ -188,6 +188,42 @@ Usage limits (B):
 - All ranks must pass the same kind of buffer (host or device) to a collective. The first device call starts the device path with a collective step.
 - A group cannot mix host and device Send/Recv; GroupEnd returns `hxcclInvalidUsage`.
 
+## PyTorch backend (C)
+
+```bash
+cmake -S . -B build-cuda -DHXCCL_CUDA=ON && cmake --build build-cuda -j
+cd python && CUDA_HOME=/usr/local/cuda pip install -e . --no-build-isolation && cd ..
+mpirun -np 2 python train.py
+```
+```python
+import hxccl_torch                      # registers "hxccl"; fills RANK/WORLD_SIZE from OpenMPI
+import torch.distributed as dist
+dist.init_process_group("hxccl")
+dist.all_reduce(t)                      # t: a contiguous CUDA tensor
+```
+
+- **Supported calls:** `all_reduce` (SUM, PRODUCT, MIN, MAX, AVG), `all_gather_into_tensor`, `reduce_scatter_tensor`, `broadcast`, `send`, `recv` and `barrier`. Each call returns an already completed `Work`.
+- **Launch with `mpirun`, not `torchrun`.** Communicators are built from `MPI_COMM_WORLD`, so `torchrun` is not supported. Socket bootstrap is left for stage E.
+- **Tests:** `mpirun -np {2,4} python -m pytest -q python/tests` compares the results against the `gloo` backend: 37 passed, 3 skipped (gloo has no integer AVG).
+
+### Measurements (C)
+
+Date: 2026-11-11, same machine and SM clock lock as B (all 42 samples at 1500 MHz, `docs/results/2026-11-11_c_clocks.csv`). Method: `python/bench_allreduce.py`, fp32 `all_reduce` sum, 5 warm-up calls, then the median of 20, timed with `torch.cuda.synchronize()` around each call. hxccl uses CUDA tensors; gloo uses CPU tensors. Raw data: `docs/results/2026-11-11_c_torch_allreduce.csv`.
+
+| size | np2 hxccl (µs) | np2 gloo (µs) | np4 hxccl (µs) | np4 gloo (µs) |
+|---:|---:|---:|---:|---:|
+| 4 KiB | 3182 | 447 | 6324 | 1296 |
+| 64 KiB | 3370 | 431 | 9339 | 1307 |
+| 1 MiB | 3415 | 705 | 9372 | 1842 |
+| 4 MiB | 3443 | 2310 | 9456 | 6250 |
+| 16 MiB | 4542 | 9411 | 10637 | 29633 |
+| 64 MiB | 10377 | 34753 | 28847 | 121033 |
+| 256 MiB | 41455 | 136131 | 106185 | 487899 |
+
+- **Up to 4 MiB gloo is faster;** hxccl carries the B device-path floor of about 3.2 ms at np2 and 6.3–9.5 ms at np4. **From 16 MiB up hxccl is faster:** 2.1–3.3× at np2 and 2.8–4.6× at np4.
+- **These are not the same kind of transfer.** gloo moves CPU memory over TCP, and hxccl copies inside one GPU, so this table compares the two backends as they run here, not as transports.
+- **PyTorch NCCL is not in the table.** With 2 ranks on one GPU it fails at the first collective: `ncclInvalidUsage ... Duplicate GPU detected : rank 0 and rank 1 both on CUDA device 1000` (NCCL 2.27.5, spec "환경 기록").
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
