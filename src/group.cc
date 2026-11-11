@@ -4,11 +4,15 @@
 #include <utility>
 #include <vector>
 
+#include "checks.h"
+#include "memspace.h"
+#include "trace.h"
+
 namespace {
 
 struct P2p {
   hxcclComm* c;
-  Transport* tr;  // the transport for this buffer's memory space
+  MemOps* m;  // host_ops or dev_ops of c, chosen from the buffer
   bool send;
   int peer;
   void* buf;
@@ -22,24 +26,38 @@ struct Group {
 };
 thread_local Group g;
 
+bool is_host(const P2p& o) { return o.m == o.c->host_ops.get(); }
+
 // Post every send/recv before waiting on any, so pairs that send to each other finish.
 hxcclResult_t run_p2p(const std::vector<P2p>& ops) {
-  std::vector<std::pair<hxcclComm*, Transport*>> used;  // one entry per distinct transport
+  // The host transport blocks in MPI_Waitall while the device one polls, so a rank waiting
+  // on host traffic could stall a peer's device traffic. Mixing is rejected for now.
+  const bool any_host = std::any_of(ops.begin(), ops.end(), is_host);
+  const bool any_dev = !std::all_of(ops.begin(), ops.end(), is_host);
+  if (any_host && any_dev)
+    return comm_fail(ops.front().c, hxcclInvalidUsage,
+                     "a group cannot mix host and device Send/Recv buffers");
+  HX_RANGE_PUSH("hxccl:p2p");
+  std::vector<std::pair<hxcclComm*, MemOps*>> used;  // one entry per distinct memory path
   for (const P2p& o : ops) {
-    if (std::none_of(used.begin(), used.end(), [&](const auto& u) { return u.second == o.tr; }))
-      used.emplace_back(o.c, o.tr);
-    hxcclResult_t r = o.send ? o.tr->isend(o.peer, o.buf, o.bytes, kP2pTag)
-                             : o.tr->irecv(o.peer, o.buf, o.bytes, kP2pTag);
+    if (std::none_of(used.begin(), used.end(), [&](const auto& u) { return u.second == o.m; }))
+      used.emplace_back(o.c, o.m);
+    Transport& tr = o.m->tr();
+    hxcclResult_t r = o.send ? tr.isend(o.peer, o.buf, o.bytes, kP2pTag)
+                             : tr.irecv(o.peer, o.buf, o.bytes, kP2pTag);
     if (r != hxcclSuccess) {
-      for (const auto& u : used) u.second->cancel_all();
-      return comm_fail(o.c, r, o.tr->error);
+      for (const auto& u : used) u.second->tr().cancel_all();
+      HX_RANGE_POP();
+      return comm_fail(o.c, r, tr.error);
     }
   }
   hxcclResult_t first = hxcclSuccess;
   for (const auto& u : used) {
-    hxcclResult_t r = u.second->waitall();
-    if (r != hxcclSuccess && first == hxcclSuccess) first = comm_fail(u.first, r, u.second->error);
+    hxcclResult_t r = u.second->tr().waitall();
+    if (r == hxcclSuccess) r = sync_ops(*u.second);
+    if (r != hxcclSuccess && first == hxcclSuccess) first = ops_fail(u.first, *u.second, r);
   }
+  HX_RANGE_POP();
   return first;
 }
 
@@ -51,8 +69,8 @@ hxcclResult_t dispatch(hxcclComm* c, std::function<hxcclResult_t()> run) {
   return hxcclSuccess;
 }
 
-hxcclResult_t p2p(hxcclComm* c, bool is_send, int peer, void* buf, size_t bytes) {
-  P2p op{c, &c->host_ops->tr(), is_send, peer, buf, bytes};
+hxcclResult_t p2p(hxcclComm* c, bool is_send, int peer, void* buf, size_t bytes, MemOps* m) {
+  P2p op{c, m, is_send, peer, buf, bytes};
   if (g.depth == 0) return run_p2p({op});
   g.p2p.push_back(op);
   return hxcclSuccess;
