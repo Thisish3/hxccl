@@ -10,6 +10,12 @@ A small NCCL-style collective communication library, built step by step to under
 >
 > Not affiliated with NVIDIA NCCL, AMD RCCL or Huawei HCCL.
 
+**Dev log (Korean, Tistory):**
+[#1 core: ring and recursive doubling](https://thisish3.tistory.com/53) ·
+[#2 the rest of the NCCL API: why Group, how NCCL averages](https://thisish3.tistory.com/55) ·
+[#3 GPU buffers over CUDA IPC, Nsight breakdown](https://thisish3.tistory.com/67) ·
+[#4 PyTorch backend, torchrun and ptrace_scope](https://thisish3.tistory.com/68)
+
 ## API
 
 Same names, numbering and argument order as NCCL v2.32.3 (`nccl.h`), with an `hxccl` prefix. Result codes, datatypes and ops have NCCL's numeric values.
