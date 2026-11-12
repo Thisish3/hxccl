@@ -2,6 +2,10 @@
 
 A small NCCL-style collective communication library, built step by step to understand how NCCL/RCCL work and to compare against them.
 
+<p align="center"><img src="docs/images/hxccl_overview.png" alt="hxccl layers: C API and PyTorch backend, argument checks and algorithm selection, ring / recursive doubling / tree algorithms behind a MemOps interface, and swappable host (MPI), device (CUDA IPC) and socket backends" width="900"></p>
+
+<p align="center"><img src="docs/images/hxccl_allreduce.png" alt="AllReduce time with CPU vs GPU buffers on one RTX 3060 Ti, 2 ranks: the GPU path wins from 8 MiB and is 5x faster at 256 MiB, with a ~3.1-3.6 ms floor at small sizes" width="760"></p>
+
 > **Status (v0.2): A (core), A2 (full CPU-side NCCL/RCCL API), B (GPU buffers over CUDA IPC), C (PyTorch `torch.distributed` backend) and the first part of E (socket bootstrap) done.**
 >
 > - **Coverage:** every collective plus Send/Recv and Group runs on host or device buffers, and device results match the CPU path bit for bit. B and C were measured on one GPU only (see the B and C sections below).
