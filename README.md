@@ -6,15 +6,15 @@ A small NCCL-style collective communication library, built step by step to under
 
 <p align="center"><img src="docs/images/hxccl_allreduce.png" alt="AllReduce time with CPU vs GPU buffers on one RTX 3060 Ti, 2 ranks: the GPU path wins from 8 MiB and is 5x faster at 256 MiB, with a ~3.1-3.6 ms floor at small sizes" width="760"></p>
 
-> **Status (v0.2): A (core), A2 (full CPU-side NCCL/RCCL API), B (GPU buffers over CUDA IPC), C (PyTorch `torch.distributed` backend) and the first part of E (socket bootstrap) done.**
+> Status (v0.2): A (core), A2 (full CPU-side NCCL/RCCL API), B (GPU buffers over CUDA IPC), C (PyTorch `torch.distributed` backend) and the first part of E (socket bootstrap) done.
 >
-> - **Coverage:** every collective plus Send/Recv and Group runs on host or device buffers, and device results match the CPU path bit for bit. B and C were measured on one GPU only (see the B and C sections below).
-> - **E, first part:** `hxcclGetUniqueId`/`hxcclCommInitRank` bootstrap over TCP sockets without MPI. So `dist.init_process_group("hxccl")` works under `torchrun` as well as `mpirun`. Under `torchrun` the device path is much slower; see the E section.
-> - **Not done yet:** comparison with RCCL/NCCL on real multi-GPU hardware (D), multi-node sockets and bootstrap timeouts (rest of E), calls that return before the work finishes, and running on HIP.
+> - Coverage: every collective plus Send/Recv and Group runs on host or device buffers, and device results match the CPU path bit for bit. B and C were measured on one GPU only (see the B and C sections below).
+> - E, first part: `hxcclGetUniqueId`/`hxcclCommInitRank` bootstrap over TCP sockets without MPI. So `dist.init_process_group("hxccl")` works under `torchrun` as well as `mpirun`. Under `torchrun` the device path is much slower; see the E section.
+> - Not done yet: comparison with RCCL/NCCL on real multi-GPU hardware (D), multi-node sockets and bootstrap timeouts (rest of E), calls that return before the work finishes, and running on HIP.
 >
 > Not affiliated with NVIDIA NCCL, AMD RCCL or Huawei HCCL.
 
-**Dev log (Korean, Tistory):**
+Dev log (Korean, Tistory):
 [#1 core: ring and recursive doubling](https://thisish3.tistory.com/53) ·
 [#2 the rest of the NCCL API: why Group, how NCCL averages](https://thisish3.tistory.com/55) ·
 [#3 GPU buffers over CUDA IPC, Nsight breakdown](https://thisish3.tistory.com/67) ·
@@ -45,13 +45,13 @@ hxcclCommDestroy(comm);
 
 Behaviour worth knowing:
 
-- **Send/Recv outside a group block.** Two ranks that both Send then Recv a large message wait for each other forever, as in NCCL. Put them in a group.
-- **Avg follows NCCL** (`src/enqueue/enqueue.cc`): integers are summed, then divided by N (truncating toward zero). Floats are first multiplied by 1/N (rounded to the datatype), then summed. For example, two fp16 values of 60000 average to 60000, not to inf.
-- **fp8 overflow differs from CUDA's default conversion.** hxccl turns e4m3 values beyond 448 into NaN and e5m2 overflow into inf. CUDA's `__nv_fp8_*` constructors saturate to the largest finite value (KNOWN_ISSUES #4). The GPU path follows the CPU path.
-- **Device buffers (B) return when the work is done.** Pass device pointers with `-DHXCCL_CUDA=ON`; the call does not return early the way NCCL does. All ranks must pass the same kind of buffer (host or device) to a collective, and one group cannot mix host and device Send/Recv (`hxcclInvalidUsage`).
-- **AllToAllv does one extra `MPI_Allreduce`** before sending. Block sizes differ per rank, so ranks first agree on whether any argument is invalid, and then all of them reject together instead of leaving the others waiting. The agreement runs at call time, also inside a group.
-- **Known problems** are listed in [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md).
-- **Abort is local.** It frees hxccl's state without talking to peers and leaks the MPI communicator on purpose.
+- Send/Recv outside a group block. Two ranks that both Send then Recv a large message wait for each other forever, as in NCCL. Put them in a group.
+- Avg follows NCCL (`src/enqueue/enqueue.cc`): integers are summed, then divided by N (truncating toward zero). Floats are first multiplied by 1/N (rounded to the datatype), then summed. For example, two fp16 values of 60000 average to 60000, not to inf.
+- fp8 overflow differs from CUDA's default conversion. hxccl turns e4m3 values beyond 448 into NaN and e5m2 overflow into inf. CUDA's `__nv_fp8_*` constructors saturate to the largest finite value (KNOWN_ISSUES #4). The GPU path follows the CPU path.
+- Device buffers (B) return when the work is done. Pass device pointers with `-DHXCCL_CUDA=ON`; the call does not return early the way NCCL does. All ranks must pass the same kind of buffer (host or device) to a collective, and one group cannot mix host and device Send/Recv (`hxcclInvalidUsage`).
+- AllToAllv does one extra `MPI_Allreduce` before sending. Block sizes differ per rank, so ranks first agree on whether any argument is invalid, and then all of them reject together instead of leaving the others waiting. The agreement runs at call time, also inside a group.
+- Known problems are listed in [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md).
+- Abort is local. It frees hxccl's state without talking to peers and leaks the MPI communicator on purpose.
 
 Moved to later stages, because they need GPU memory, streams, or a socket bootstrap:
 
@@ -88,11 +88,11 @@ Algorithms never call MPI or CUDA directly: they get a `MemOps`. The same algori
 
 `ctest` runs every test under `mpirun -np N` for N ∈ {1, 2, 3, 4, 5, 8} (78 test runs):
 
-- **Correctness against MPI:** every collective is compared bit-for-bit with `MPI_Allreduce` / `MPI_Allgather` / `MPI_Reduce_scatter_block` / `MPI_Bcast`, for counts {0, 1, 3, 7, 1000, 4099}. Inputs are exactly representable, so the order of reduction does not matter. The tests cover all ops and dtypes, the ring / rd / auto algorithms, in-place calls, and broadcast from root 0 and root N−1.
-- **Traffic:** the bytes and messages each rank sends must equal the schedule exactly. For ring this is the sum of the chunk sizes it forwards (2(N−1) messages). For rd it is log₂N messages × S when N is a power of two.
-- **Errors:** invalid arguments return `hxcclInvalidArgument` and send nothing. An MPI failure returns `hxcclSystemError` and the process stays alive, because the communicator uses `MPI_ERRORS_RETURN`.
-- **GPU (`-DHXCCL_CUDA=ON`):** 24 more runs (`gpu_reduce`, `gpu_allreduce`, `gpu_collectives`, `gpu_p2p` at N ∈ {1, 2, 4}, each also with `HXCCL_IPC_CHUNK=4096`). Every device result is compared bit for bit with the CPU path on the same input, and the traffic counters must match too. The reduction kernels are checked for all 12 dtypes × ops.
-- **PyTorch:** `mpirun -np {2,4} python -m pytest python/tests` compares the results with the `gloo` backend.
+- Correctness against MPI: every collective is compared bit-for-bit with `MPI_Allreduce` / `MPI_Allgather` / `MPI_Reduce_scatter_block` / `MPI_Bcast`, for counts {0, 1, 3, 7, 1000, 4099}. Inputs are exactly representable, so the order of reduction does not matter. The tests cover all ops and dtypes, the ring / rd / auto algorithms, in-place calls, and broadcast from root 0 and root N−1.
+- Traffic: the bytes and messages each rank sends must equal the schedule exactly. For ring this is the sum of the chunk sizes it forwards (2(N−1) messages). For rd it is log₂N messages × S when N is a power of two.
+- Errors: invalid arguments return `hxcclInvalidArgument` and send nothing. An MPI failure returns `hxcclSystemError` and the process stays alive, because the communicator uses `MPI_ERRORS_RETURN`.
+- GPU (`-DHXCCL_CUDA=ON`): 24 more runs (`gpu_reduce`, `gpu_allreduce`, `gpu_collectives`, `gpu_p2p` at N ∈ {1, 2, 4}, each also with `HXCCL_IPC_CHUNK=4096`). Every device result is compared bit for bit with the CPU path on the same input, and the traffic counters must match too. The reduction kernels are checked for all 12 dtypes × ops.
+- PyTorch: `mpirun -np {2,4} python -m pytest python/tests` compares the results with the `gloo` backend.
 
 ## Build
 
@@ -150,9 +150,9 @@ What was measured:
 
 Not verified:
 
-- **Why N = 8 is unstable.** Eight ranks on 4 performance + 4 efficiency cores is one candidate, but it was not tested.
-- **Why bandwidth drops at 64 MB.** Cache and memory effects are possible, but they were not measured.
-- **Which algorithm OpenMPI picks at each size.** Its `coll/tuned` decision was not inspected.
+- Why N = 8 is unstable. Eight ranks on 4 performance + 4 efficiency cores is one candidate, but it was not tested.
+- Why bandwidth drops at 64 MB. Cache and memory effects are possible, but they were not measured.
+- Which algorithm OpenMPI picks at each size. Its `coll/tuned` decision was not inspected.
 
 ## Measurements (A2: other collectives, CPU, shared memory)
 
@@ -177,7 +177,7 @@ hxccl time ÷ OpenMPI time:
 
 Date: 2026-11-11. RTX 3060 Ti 8 GB (sm_86), Windows driver 581.80, WSL2 Ubuntu 22.04, CUDA 12.2, OpenMPI 4.1.2, build `-DHXCCL_CUDA=ON` Release. SM clock locked at 1500 MHz with `nvidia-smi -lgc 1500,1500`; all 96 one-second samples in `docs/results/2026-11-11_b_clocks.csv` read 1500 MHz. The memory clock was not locked: 66 samples, taken during the host-buffer runs, read 810 MHz, and the rest read 6800–7000 MHz. Method: `scripts/measure_b.sh`, which runs `hxccl_perf -o allreduce` with fp32 sum, 5 warm-up calls, then the median of 20 rank-max wall times. Every call returns when the work is done. Raw tables are in `docs/results/2026-11-11_b_allreduce_np{2,4}_{host,device}.txt`.
 
-**Limit: every rank shares one GPU.** The "transfer" is a copy inside one GPU's memory, so these numbers do not show GPU-to-GPU (NVLink/PCIe) bandwidth. They show where the IPC design spends time.
+Limit: every rank shares one GPU. The "transfer" is a copy inside one GPU's memory, so these numbers do not show GPU-to-GPU (NVLink/PCIe) bandwidth. They show where the IPC design spends time.
 
 AllReduce median time (µs):
 
@@ -191,8 +191,8 @@ AllReduce median time (µs):
 | 64 MiB | 53247 | 10970 | 128069 | 30065 |
 | 256 MiB | 216332 | 43028 | 516918 | 110449 |
 
-- **Up to 4 MiB the host path is faster.** The device path has a floor of about 3.1–3.6 ms at np2. At np4 the floor is 6.7 ms with recursive doubling (below 64 KiB) and 9.3–9.8 ms with ring.
-- **From 8 MiB up the device path is faster.** The full table shows the crossover between 4 and 8 MiB at both np2 and np4. Speedup at np2: 1.8× at 8 MiB, 2.5× at 16 MiB, 4.9–5.0× at 64–256 MiB. At np4: 1.3× at 8 MiB, 2.9× at 16 MiB, 4.3–4.7× at 64–256 MiB. At 64 MiB and above, busbw is 6.1–6.2 GB/s at np2 and 3.3–3.6 GB/s at np4.
+- Up to 4 MiB the host path is faster. The device path has a floor of about 3.1–3.6 ms at np2. At np4 the floor is 6.7 ms with recursive doubling (below 64 KiB) and 9.3–9.8 ms with ring.
+- From 8 MiB up the device path is faster. The full table shows the crossover between 4 and 8 MiB at both np2 and np4. Speedup at np2: 1.8× at 8 MiB, 2.5× at 16 MiB, 4.9–5.0× at 64–256 MiB. At np4: 1.3× at 8 MiB, 2.9× at 16 MiB, 4.3–4.7× at 64–256 MiB. At 64 MiB and above, busbw is 6.1–6.2 GB/s at np2 and 3.3–3.6 GB/s at np4.
 
 Time breakdown from Nsight Systems (`scripts/nsys_b.sh`, np2, 25 calls including warm-up, rank 0 / rank 1, ms per call = total ÷ 25). The NVTX ranges are CPU-side time. `ipc:copy` is `cudaMemcpyAsync` + `cudaStreamSynchronize` of one chunk. `reduce` is only the kernel launch; the kernel runs on the stream and its time lands in the next synchronize. Nsight Systems 2023.2 in WSL recorded no GPU kernel or memcpy trace ("does not contain CUDA kernel data"), so GPU-side time is not split out.
 
@@ -202,9 +202,9 @@ Time breakdown from Nsight Systems (`scripts/nsys_b.sh`, np2, 25 calls including
 | 4 MiB | 4.09 / 4.11 | 1.00 / 2.00 | 0.04 / 0.03 | 0.75 / 0.75 | 2.31 / 1.33 |
 | 64 MiB | 12.24 / 12.23 | 5.77 / 5.24 | 0.05 / 0.04 | 0.81 / 0.81 | 5.60 / 6.13 |
 
-- **`cudaMallocAsync` costs a lot on every call.** It is called once per call (25 times in 25 calls), with a median of 0.31–0.37 ms. Why it does not reuse pool memory between calls is not confirmed: the pool's release threshold was not inspected.
-- **Each chunk copy is slow.** The median `ipc:copy` is 0.14–0.15 ms, even for a 32 KiB chunk. Median `cudaStreamSynchronize` is 0.13–0.15 ms. Why one synchronize takes that long on WSL2 is not confirmed.
-- **The "rest" column is not split further.** The MPI READY/DONE waits were not traced (`-t mpi` recorded only `MPI_Init`/`MPI_Finalize`), so how the remainder divides between waiting and other work is not confirmed.
+- `cudaMallocAsync` costs a lot on every call. It is called once per call (25 times in 25 calls), with a median of 0.31–0.37 ms. Why it does not reuse pool memory between calls is not confirmed: the pool's release threshold was not inspected.
+- Each chunk copy is slow. The median `ipc:copy` is 0.14–0.15 ms, even for a 32 KiB chunk. Median `cudaStreamSynchronize` is 0.13–0.15 ms. Why one synchronize takes that long on WSL2 is not confirmed.
+- The "rest" column is not split further. The MPI READY/DONE waits were not traced (`-t mpi` recorded only `MPI_Init`/`MPI_Finalize`), so how the remainder divides between waiting and other work is not confirmed.
 
 Nsight Systems and Nsight Compute GUI captures of the time breakdown are in [`docs/results/figs/`](docs/results/figs/README.md). They show that the largest part of the device floor is the first `ipc:copy` synchronize of a call (about 2 ms; cause not confirmed).
 
@@ -222,8 +222,8 @@ Usage limits (B):
 - Build with `-DHXCCL_CUDA=ON`. A call returns only after its device work finishes; it does not return early the way NCCL does.
 - All ranks must pass the same kind of buffer (host or device) to a collective. The first device call starts the device path with a collective step.
 - A group cannot mix host and device Send/Recv; GroupEnd returns `hxcclInvalidUsage`.
-- **C API and device Send/Recv:** create a CUDA context on every rank before creating the communicator, or set `HXCCL_DEVICE=1`. Otherwise a first device Send/Recv that only some ranks make hangs (KNOWN_ISSUES #37).
-- **Threads:** communicators created from one another (Split/Shrink) on socket communicators share sockets, so use them from one thread (KNOWN_ISSUES #38).
+- C API and device Send/Recv: create a CUDA context on every rank before creating the communicator, or set `HXCCL_DEVICE=1`. Otherwise a first device Send/Recv that only some ranks make hangs (KNOWN_ISSUES #37).
+- Threads: communicators created from one another (Split/Shrink) on socket communicators share sockets, so use them from one thread (KNOWN_ISSUES #38).
 
 ## PyTorch backend (C)
 
@@ -239,11 +239,11 @@ dist.init_process_group("hxccl")
 dist.all_reduce(t)                      # t: a contiguous CUDA tensor
 ```
 
-- **Supported calls:** `all_reduce` (SUM, PRODUCT, MIN, MAX, AVG), `all_gather_into_tensor`, `reduce_scatter_tensor`, `broadcast`, `send`, `recv` and `barrier`. Each call returns an already completed `Work`.
-- **`torchrun` and `mpirun` both work (E).** The communicator is bootstrapped over TCP sockets.
-  - **Under `mpirun`:** the extension initializes MPI, and device data moves over CUDA IPC.
-  - **Under `torchrun`:** with Linux Yama `ptrace_scope=1`, the CUDA IPC handles cannot be opened (LEDGER E4). Every rank then agrees on a staged path through host memory and TCP, which is up to 13× slower for large tensors (E section).
-- **Tests:** `torchrun --nproc-per-node {2,4} -m pytest` and `mpirun -np {2,4} python -m pytest -q python/tests` compare the results against the `gloo` backend: 37 passed, 3 skipped (gloo has no integer AVG).
+- Supported calls: `all_reduce` (SUM, PRODUCT, MIN, MAX, AVG), `all_gather_into_tensor`, `reduce_scatter_tensor`, `broadcast`, `send`, `recv` and `barrier`. Each call returns an already completed `Work`.
+- `torchrun` and `mpirun` both work (E). The communicator is bootstrapped over TCP sockets.
+  - Under `mpirun`: the extension initializes MPI, and device data moves over CUDA IPC.
+  - Under `torchrun`: with Linux Yama `ptrace_scope=1`, the CUDA IPC handles cannot be opened (LEDGER E4). Every rank then agrees on a staged path through host memory and TCP, which is up to 13× slower for large tensors (E section).
+- Tests: `torchrun --nproc-per-node {2,4} -m pytest` and `mpirun -np {2,4} python -m pytest -q python/tests` compare the results against the `gloo` backend: 37 passed, 3 skipped (gloo has no integer AVG).
 
 ### Measurements (C)
 
@@ -259,19 +259,19 @@ Date: 2026-11-11, same machine and SM clock lock as B (all 42 samples at 1500 MH
 | 64 MiB | 10377 | 34753 | 28847 | 121033 |
 | 256 MiB | 41455 | 136131 | 106185 | 487899 |
 
-- **Up to 4 MiB gloo is faster;** hxccl carries the B device-path floor of about 3.2 ms at np2 and 6.3–9.5 ms at np4. **From 16 MiB up hxccl is faster:** 2.1–3.3× at np2 and 2.8–4.6× at np4.
-- **These are not the same kind of transfer.** gloo moves CPU memory over TCP, and hxccl copies inside one GPU, so this table compares the two backends as they run here, not as transports.
-- **PyTorch NCCL is not in the table.** With 2 ranks on one GPU it fails at the first collective: `ncclInvalidUsage ... Duplicate GPU detected : rank 0 and rank 1 both on CUDA device 1000` (NCCL 2.27.5, spec "환경 기록").
+- Up to 4 MiB gloo is faster; hxccl carries the B device-path floor of about 3.2 ms at np2 and 6.3–9.5 ms at np4. From 16 MiB up hxccl is faster: 2.1–3.3× at np2 and 2.8–4.6× at np4.
+- These are not the same kind of transfer. gloo moves CPU memory over TCP, and hxccl copies inside one GPU, so this table compares the two backends as they run here, not as transports.
+- PyTorch NCCL is not in the table. With 2 ranks on one GPU it fails at the first collective: `ncclInvalidUsage ... Duplicate GPU detected : rank 0 and rank 1 both on CUDA device 1000` (NCCL 2.27.5, spec "환경 기록").
 
 ## Measurements (E: socket communicators and torchrun)
 
 Date: 2026-11-11, same machine as B. The SM clock was locked at 1500 MHz: all 271 + 16 one-second samples read 1500 MHz (`docs/results/2026-11-11_e_clocks.csv`, `_e_torch_mpirun_clocks.csv`).
 
 Method:
-- **`hxccl_perf`** (`scripts/measure_e.sh`): fp32 sum AllReduce, 4 KiB–256 MiB in steps of 4×, 5 warm-up calls, median of 20. Raw tables: `docs/results/2026-11-11_e_allreduce_np{2,4}_*.txt`.
-- **Socket rows:** `HXCCL_BOOTSTRAP=socket` makes `hxcclCommInitMPI` build a socket communicator over the same ranks.
-- **"staged":** forced with `HXCCL_DEVICE_TRANSPORT=staged`. This is the path the device buffers take under `torchrun`.
-- **PyTorch:** `python/bench_allreduce.py`, data in `docs/results/2026-11-11_e_torch_allreduce.csv`.
+- `hxccl_perf` (`scripts/measure_e.sh`): fp32 sum AllReduce, 4 KiB–256 MiB in steps of 4×, 5 warm-up calls, median of 20. Raw tables: `docs/results/2026-11-11_e_allreduce_np{2,4}_*.txt`.
+- Socket rows: `HXCCL_BOOTSTRAP=socket` makes `hxcclCommInitMPI` build a socket communicator over the same ranks.
+- "staged": forced with `HXCCL_DEVICE_TRANSPORT=staged`. This is the path the device buffers take under `torchrun`.
+- PyTorch: `python/bench_allreduce.py`, data in `docs/results/2026-11-11_e_torch_allreduce.csv`.
 
 AllReduce median time (ms):
 
@@ -285,10 +285,10 @@ AllReduce median time (ms):
 | np4, 16 MiB | 30.2 | 42.7 | 11.2 | 11.1 | 78.1 | 81.8 | 10.7 |
 | np4, 256 MiB | 523 | 686 | 111 | 111 | 1198 | 1194 | 107 |
 
-- **Socket host transport vs MPI:** 2.5–2.8× slower at 4 KiB and 1.3–1.4× slower from 16 MiB up. The socket transport goes through TCP loopback. Which OpenMPI transport the MPI rows used (shared memory is likely) was not checked.
-- **IPC control over sockets vs MPI:** almost the same (np4 rows match within 1 %). The control messages are small.
-- **The staged path is the slow one.** At 256 MiB it is 12.6× (np2) and 10.8× (np4) slower than IPC. It is even slower than the socket host transport, because it adds a device→host and a host→device copy around it. The torch numbers under `torchrun` follow the staged column, and under `mpirun` the IPC column. Against `gloo` from the C section (np2, 256 MiB: 136 ms), hxccl under `torchrun` is 4.1× slower.
-- **The 3.2 ms (np2) / 6.6 ms (np4) floor is the same on the staged path,** which makes no IPC copies at all. So the floor is not the IPC copy itself (B Nsight figures). Its cause is not confirmed.
+- Socket host transport vs MPI: 2.5–2.8× slower at 4 KiB and 1.3–1.4× slower from 16 MiB up. The socket transport goes through TCP loopback. Which OpenMPI transport the MPI rows used (shared memory is likely) was not checked.
+- IPC control over sockets vs MPI: almost the same (np4 rows match within 1 %). The control messages are small.
+- The staged path is the slow one. At 256 MiB it is 12.6× (np2) and 10.8× (np4) slower than IPC. It is even slower than the socket host transport, because it adds a device→host and a host→device copy around it. The torch numbers under `torchrun` follow the staged column, and under `mpirun` the IPC column. Against `gloo` from the C section (np2, 256 MiB: 136 ms), hxccl under `torchrun` is 4.1× slower.
+- The 3.2 ms (np2) / 6.6 ms (np4) floor is the same on the staged path, which makes no IPC copies at all. So the floor is not the IPC copy itself (B Nsight figures). Its cause is not confirmed.
 
 ## License
 
